@@ -1022,7 +1022,7 @@ static void open_pipewire_remote(obs_pipewire_data *obs_pw)
 	g_variant_builder_init(&builder, G_VARIANT_TYPE_VARDICT);
 
 	g_dbus_proxy_call_with_unix_fd_list(
-		portal_get_dbus_proxy(), "OpenPipeWireRemote",
+		portal_get_screencast_proxy(), "OpenPipeWireRemote",
 		g_variant_new("(oa{sv})", obs_pw->session_handle, &builder),
 		G_DBUS_CALL_FLAGS_NONE, -1, NULL, obs_pw->cancellable,
 		on_pipewire_remote_opened_cb, obs_pw);
@@ -1147,7 +1147,7 @@ static void start(obs_pipewire_data *obs_pw)
 	g_variant_builder_add(&builder, "{sv}", "handle_token",
 			      g_variant_new_string(request_token));
 
-	g_dbus_proxy_call(portal_get_dbus_proxy(), "Start",
+	g_dbus_proxy_call(portal_get_screencast_proxy(), "Start",
 			  g_variant_new("(osa{sv})", obs_pw->session_handle, "",
 					&builder),
 			  G_DBUS_CALL_FLAGS_NONE, -1, obs_pw->cancellable,
@@ -1255,7 +1255,7 @@ static void select_source(obs_pipewire_data *obs_pw)
 		}
 	}
 
-	g_dbus_proxy_call(portal_get_dbus_proxy(), "SelectSources",
+	g_dbus_proxy_call(portal_get_screencast_proxy(), "SelectSources",
 			  g_variant_new("(oa{sv})", obs_pw->session_handle,
 					&builder),
 			  G_DBUS_CALL_FLAGS_NONE, -1, obs_pw->cancellable,
@@ -1342,7 +1342,7 @@ static void create_session(obs_pipewire_data *obs_pw)
 	g_variant_builder_add(&builder, "{sv}", "session_handle_token",
 			      g_variant_new_string(session_token));
 
-	g_dbus_proxy_call(portal_get_dbus_proxy(), "CreateSession",
+	g_dbus_proxy_call(portal_get_screencast_proxy(), "CreateSession",
 			  g_variant_new("(a{sv})", &builder),
 			  G_DBUS_CALL_FLAGS_NONE, -1, obs_pw->cancellable,
 			  on_session_created_cb, call);
@@ -1364,7 +1364,7 @@ static gboolean init_obs_pipewire(obs_pipewire_data *obs_pw)
 	connection = portal_get_dbus_connection();
 	if (!connection)
 		return FALSE;
-	proxy = portal_get_dbus_proxy();
+	proxy = portal_get_screencast_proxy();
 	if (!proxy)
 		return FALSE;
 

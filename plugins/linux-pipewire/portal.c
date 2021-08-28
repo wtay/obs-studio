@@ -22,9 +22,9 @@
 #include "pipewire.h"
 
 static GDBusConnection *connection = NULL;
-static GDBusProxy *proxy = NULL;
+static GDBusProxy *screencast_proxy = NULL;
 
-static void ensure_proxy(void)
+static void ensure_connection(void)
 {
 	g_autoptr(GError) error = NULL;
 	if (!connection) {
@@ -37,9 +37,16 @@ static void ensure_proxy(void)
 			return;
 		}
 	}
+}
 
-	if (!proxy) {
-		proxy = g_dbus_proxy_new_sync(
+static void ensure_screencast_proxy(void)
+{
+	g_autoptr(GError) error = NULL;
+
+	ensure_connection();
+
+	if (!screencast_proxy) {
+		screencast_proxy = g_dbus_proxy_new_sync(
 			connection, G_DBUS_PROXY_FLAGS_NONE, NULL,
 			"org.freedesktop.portal.Desktop",
 			"/org/freedesktop/portal/desktop",
@@ -59,13 +66,13 @@ uint32_t portal_get_available_capture_types(void)
 	g_autoptr(GVariant) cached_source_types = NULL;
 	uint32_t available_source_types;
 
-	ensure_proxy();
+	ensure_screencast_proxy();
 
-	if (!proxy)
+	if (!screencast_proxy)
 		return 0;
 
-	cached_source_types =
-		g_dbus_proxy_get_cached_property(proxy, "AvailableSourceTypes");
+	cached_source_types = g_dbus_proxy_get_cached_property(
+		screencast_proxy, "AvailableSourceTypes");
 	available_source_types =
 		cached_source_types ? g_variant_get_uint32(cached_source_types)
 				    : 0;
@@ -78,13 +85,13 @@ uint32_t portal_get_available_cursor_modes(void)
 	g_autoptr(GVariant) cached_cursor_modes = NULL;
 	uint32_t available_cursor_modes;
 
-	ensure_proxy();
+	ensure_screencast_proxy();
 
-	if (!proxy)
+	if (!screencast_proxy)
 		return 0;
 
-	cached_cursor_modes =
-		g_dbus_proxy_get_cached_property(proxy, "AvailableCursorModes");
+	cached_cursor_modes = g_dbus_proxy_get_cached_property(
+		screencast_proxy, "AvailableCursorModes");
 	available_cursor_modes =
 		cached_cursor_modes ? g_variant_get_uint32(cached_cursor_modes)
 				    : 0;
@@ -97,12 +104,13 @@ uint32_t portal_get_screencast_version(void)
 	g_autoptr(GVariant) cached_version = NULL;
 	uint32_t version;
 
-	ensure_proxy();
+	ensure_screencast_proxy();
 
-	if (!proxy)
+	if (!screencast_proxy)
 		return 0;
 
-	cached_version = g_dbus_proxy_get_cached_property(proxy, "version");
+	cached_version =
+		g_dbus_proxy_get_cached_property(screencast_proxy, "version");
 	version = cached_version ? g_variant_get_uint32(cached_version) : 0;
 
 	return version;
@@ -110,12 +118,12 @@ uint32_t portal_get_screencast_version(void)
 
 GDBusConnection *portal_get_dbus_connection(void)
 {
-	ensure_proxy();
+	ensure_connection();
 	return connection;
 }
 
-GDBusProxy *portal_get_dbus_proxy(void)
+GDBusProxy *portal_get_screencast_proxy(void)
 {
-	ensure_proxy();
-	return proxy;
+	ensure_screencast_proxy();
+	return screencast_proxy;
 }
