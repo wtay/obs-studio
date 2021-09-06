@@ -20,6 +20,7 @@
 
 #include "pipewire.h"
 
+#include "dbus-requests.h"
 #include "portal.h"
 
 #include <util/darray.h>
@@ -42,7 +43,6 @@
 #define SPA_POD_PROP_FLAG_DONT_FIXATE (1 << 4)
 #endif
 
-#define REQUEST_PATH "/org/freedesktop/portal/desktop/request/%s/obs%u"
 #define SESSION_PATH "/org/freedesktop/portal/desktop/session/%s/obs%u"
 
 #define CURSOR_META_SIZE(width, height)                                    \
@@ -113,13 +113,6 @@ struct _obs_pipewire_data {
 	DARRAY(struct format_info) format_info;
 };
 
-struct dbus_call_data {
-	obs_pipewire_data *obs_pw;
-	char *request_path;
-	guint signal_id;
-	gulong cancelled_id;
-};
-
 /* auxiliary methods */
 
 static bool parse_pw_version(struct obs_pw_version *dst, const char *version)
@@ -165,29 +158,6 @@ static const char *capture_type_to_string(enum portal_capture_type capture_type)
 	return "unknown";
 }
 
-static void new_request_path(obs_pipewire_data *data, char **out_path,
-			     char **out_token)
-{
-	static uint32_t request_token_count = 0;
-
-	request_token_count++;
-
-	if (out_token) {
-		struct dstr str;
-		dstr_init(&str);
-		dstr_printf(&str, "obs%u", request_token_count);
-		*out_token = str.array;
-	}
-
-	if (out_path) {
-		struct dstr str;
-		dstr_init(&str);
-		dstr_printf(&str, REQUEST_PATH, data->sender_name,
-			    request_token_count);
-		*out_path = str.array;
-	}
-}
-
 static void new_session_path(obs_pipewire_data *data, char **out_path,
 			     char **out_token)
 {
@@ -209,58 +179,6 @@ static void new_session_path(obs_pipewire_data *data, char **out_path,
 			    session_token_count);
 		*out_path = str.array;
 	}
-}
-
-static void on_cancelled_cb(GCancellable *cancellable, void *data)
-{
-	UNUSED_PARAMETER(cancellable);
-
-	struct dbus_call_data *call = data;
-
-	blog(LOG_INFO, "[pipewire] Screencast session cancelled");
-
-	g_dbus_connection_call(
-		portal_get_dbus_connection(), "org.freedesktop.portal.Desktop",
-		call->request_path, "org.freedesktop.portal.Request", "Close",
-		NULL, NULL, G_DBUS_CALL_FLAGS_NONE, -1, NULL, NULL, NULL);
-}
-
-static struct dbus_call_data *subscribe_to_signal(obs_pipewire_data *obs_pw,
-						  const char *path,
-						  GDBusSignalCallback callback)
-{
-	struct dbus_call_data *call;
-
-	call = bzalloc(sizeof(struct dbus_call_data));
-	call->obs_pw = obs_pw;
-	call->request_path = bstrdup(path);
-	call->cancelled_id = g_signal_connect(obs_pw->cancellable, "cancelled",
-					      G_CALLBACK(on_cancelled_cb),
-					      call);
-	call->signal_id = g_dbus_connection_signal_subscribe(
-		portal_get_dbus_connection(), "org.freedesktop.portal.Desktop",
-		"org.freedesktop.portal.Request", "Response",
-		call->request_path, NULL, G_DBUS_SIGNAL_FLAGS_NO_MATCH_RULE,
-		callback, call, NULL);
-
-	return call;
-}
-
-static void dbus_call_data_free(struct dbus_call_data *call)
-{
-	if (!call)
-		return;
-
-	if (call->signal_id)
-		g_dbus_connection_signal_unsubscribe(
-			portal_get_dbus_connection(), call->signal_id);
-
-	if (call->cancelled_id > 0)
-		g_signal_handler_disconnect(call->obs_pw->cancellable,
-					    call->cancelled_id);
-
-	g_clear_pointer(&call->request_path, bfree);
-	bfree(call);
 }
 
 static void teardown_pipewire(obs_pipewire_data *obs_pw)
@@ -1046,13 +964,10 @@ static void on_start_response_received_cb(GDBusConnection *connection,
 	g_autoptr(GVariant) stream_properties = NULL;
 	g_autoptr(GVariant) streams = NULL;
 	g_autoptr(GVariant) result = NULL;
-	struct dbus_call_data *call = user_data;
-	obs_pipewire_data *obs_pw = call->obs_pw;
+	obs_pipewire_data *obs_pw = user_data;
 	GVariantIter iter;
 	uint32_t response;
 	size_t n_streams;
-
-	g_clear_pointer(&call, dbus_call_data_free);
 
 	g_variant_get(parameters, "(u@a{sv})", &response, &result);
 
@@ -1131,17 +1046,16 @@ static void on_started_cb(GObject *source, GAsyncResult *res, void *user_data)
 static void start(obs_pipewire_data *obs_pw)
 {
 	GVariantBuilder builder;
-	struct dbus_call_data *call;
-	char *request_token;
-	char *request_path;
-
-	new_request_path(obs_pw, &request_path, &request_token);
+	dbus_request *request;
+	const char *request_token;
 
 	blog(LOG_INFO, "[pipewire] Asking for %s",
 	     capture_type_to_string(obs_pw->capture_type));
 
-	call = subscribe_to_signal(obs_pw, request_path,
-				   on_start_response_received_cb);
+	request = dbus_request_new(obs_pw->cancellable,
+				   on_start_response_received_cb, obs_pw);
+
+	request_token = dbus_request_get_token(request);
 
 	g_variant_builder_init(&builder, G_VARIANT_TYPE_VARDICT);
 	g_variant_builder_add(&builder, "{sv}", "handle_token",
@@ -1151,10 +1065,7 @@ static void start(obs_pipewire_data *obs_pw)
 			  g_variant_new("(osa{sv})", obs_pw->session_handle, "",
 					&builder),
 			  G_DBUS_CALL_FLAGS_NONE, -1, obs_pw->cancellable,
-			  on_started_cb, call);
-
-	bfree(request_token);
-	bfree(request_path);
+			  on_started_cb, obs_pw);
 }
 
 /* ------------------------------------------------- */
@@ -1171,13 +1082,10 @@ static void on_select_source_response_received_cb(
 	UNUSED_PARAMETER(signal_name);
 
 	g_autoptr(GVariant) ret = NULL;
-	struct dbus_call_data *call = user_data;
-	obs_pipewire_data *obs_pw = call->obs_pw;
+	obs_pipewire_data *obs_pw = user_data;
 	uint32_t response;
 
 	blog(LOG_DEBUG, "[pipewire] Response to select source received");
-
-	g_clear_pointer(&call, dbus_call_data_free);
 
 	g_variant_get(parameters, "(u@a{sv})", &response, &ret);
 
@@ -1210,16 +1118,16 @@ static void on_source_selected_cb(GObject *source, GAsyncResult *res,
 
 static void select_source(obs_pipewire_data *obs_pw)
 {
-	struct dbus_call_data *call;
 	GVariantBuilder builder;
 	uint32_t available_cursor_modes;
-	char *request_token;
-	char *request_path;
+	dbus_request *request;
+	const char *request_token;
 
-	new_request_path(obs_pw, &request_path, &request_token);
+	request = dbus_request_new(obs_pw->cancellable,
+				   on_select_source_response_received_cb,
+				   obs_pw);
 
-	call = subscribe_to_signal(obs_pw, request_path,
-				   on_select_source_response_received_cb);
+	request_token = dbus_request_get_token(request);
 
 	g_variant_builder_init(&builder, G_VARIANT_TYPE_VARDICT);
 	g_variant_builder_add(&builder, "{sv}", "types",
@@ -1259,10 +1167,7 @@ static void select_source(obs_pipewire_data *obs_pw)
 			  g_variant_new("(oa{sv})", obs_pw->session_handle,
 					&builder),
 			  G_DBUS_CALL_FLAGS_NONE, -1, obs_pw->cancellable,
-			  on_source_selected_cb, call);
-
-	bfree(request_token);
-	bfree(request_path);
+			  on_source_selected_cb, obs_pw);
 }
 
 /* ------------------------------------------------- */
@@ -1280,11 +1185,8 @@ static void on_create_session_response_received_cb(
 
 	g_autoptr(GVariant) session_handle_variant = NULL;
 	g_autoptr(GVariant) result = NULL;
-	struct dbus_call_data *call = user_data;
-	obs_pipewire_data *obs_pw = call->obs_pw;
+	obs_pipewire_data *obs_pw = user_data;
 	uint32_t response;
-
-	g_clear_pointer(&call, dbus_call_data_free);
 
 	g_variant_get(parameters, "(u@a{sv})", &response, &result);
 
@@ -1324,17 +1226,18 @@ static void on_session_created_cb(GObject *source, GAsyncResult *res,
 
 static void create_session(obs_pipewire_data *obs_pw)
 {
-	struct dbus_call_data *call;
 	GVariantBuilder builder;
+	dbus_request *request;
+	const char *request_token;
 	char *session_token;
-	char *request_token;
-	char *request_path;
 
-	new_request_path(obs_pw, &request_path, &request_token);
 	new_session_path(obs_pw, NULL, &session_token);
 
-	call = subscribe_to_signal(obs_pw, request_path,
-				   on_create_session_response_received_cb);
+	request = dbus_request_new(obs_pw->cancellable,
+				   on_create_session_response_received_cb,
+				   obs_pw);
+
+	request_token = dbus_request_get_token(request);
 
 	g_variant_builder_init(&builder, G_VARIANT_TYPE_VARDICT);
 	g_variant_builder_add(&builder, "{sv}", "handle_token",
@@ -1345,11 +1248,9 @@ static void create_session(obs_pipewire_data *obs_pw)
 	g_dbus_proxy_call(portal_get_screencast_proxy(), "CreateSession",
 			  g_variant_new("(a{sv})", &builder),
 			  G_DBUS_CALL_FLAGS_NONE, -1, obs_pw->cancellable,
-			  on_session_created_cb, call);
+			  on_session_created_cb, obs_pw);
 
 	bfree(session_token);
-	bfree(request_token);
-	bfree(request_path);
 }
 
 /* ------------------------------------------------- */

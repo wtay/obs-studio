@@ -38,7 +38,9 @@ target_sources(
           pipewire-capture.c
           pipewire-capture.h
           portal.c
-          portal.h)
+          portal.h
+          dbus-requests.c
+          dbus-requests.h)
 
 target_link_libraries(
   linux-pipewire PRIVATE OBS::libobs OBS::obsglad PipeWire::PipeWire GIO::GIO
