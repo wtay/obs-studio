@@ -64,7 +64,6 @@ struct format_info {
 struct _obs_pipewire_data {
 	GCancellable *cancellable;
 
-	char *sender_name;
 	char *session_handle;
 	char *restore_token;
 
@@ -158,8 +157,7 @@ static const char *capture_type_to_string(enum portal_capture_type capture_type)
 	return "unknown";
 }
 
-static void new_session_path(obs_pipewire_data *data, char **out_path,
-			     char **out_token)
+static void new_session_path(char **out_path, char **out_token)
 {
 	static uint32_t session_token_count = 0;
 
@@ -175,7 +173,7 @@ static void new_session_path(obs_pipewire_data *data, char **out_path,
 	if (out_path) {
 		struct dstr str;
 		dstr_init(&str);
-		dstr_printf(&str, SESSION_PATH, data->sender_name,
+		dstr_printf(&str, SESSION_PATH, dbus_get_sender_name(),
 			    session_token_count);
 		*out_path = str.array;
 	}
@@ -216,7 +214,6 @@ static void destroy_session(obs_pipewire_data *obs_pw)
 		g_clear_pointer(&obs_pw->session_handle, g_free);
 	}
 
-	g_clear_pointer(&obs_pw->sender_name, bfree);
 	obs_enter_graphics();
 	g_clear_pointer(&obs_pw->cursor.texture, gs_texture_destroy);
 	g_clear_pointer(&obs_pw->texture, gs_texture_destroy);
@@ -1231,7 +1228,7 @@ static void create_session(obs_pipewire_data *obs_pw)
 	const char *request_token;
 	char *session_token;
 
-	new_session_path(obs_pw, NULL, &session_token);
+	new_session_path(NULL, &session_token);
 
 	request = dbus_request_new(obs_pw->cancellable,
 				   on_create_session_response_received_cb,
@@ -1259,7 +1256,6 @@ static gboolean init_obs_pipewire(obs_pipewire_data *obs_pw)
 {
 	GDBusConnection *connection;
 	GDBusProxy *proxy;
-	char *aux;
 
 	obs_pw->cancellable = g_cancellable_new();
 	connection = portal_get_dbus_connection();
@@ -1269,15 +1265,8 @@ static gboolean init_obs_pipewire(obs_pipewire_data *obs_pw)
 	if (!proxy)
 		return FALSE;
 
-	obs_pw->sender_name =
-		bstrdup(g_dbus_connection_get_unique_name(connection) + 1);
-
-	/* Replace dots by underscores */
-	while ((aux = strstr(obs_pw->sender_name, ".")) != NULL)
-		*aux = '_';
-
 	blog(LOG_INFO, "PipeWire initialized (sender name: %s)",
-	     obs_pw->sender_name);
+	     dbus_get_sender_name());
 
 	create_session(obs_pw);
 
