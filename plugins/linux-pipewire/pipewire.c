@@ -20,15 +20,6 @@
 
 #include "pipewire.h"
 
-#include "dbus-requests.h"
-#include "portal.h"
-
-#include <util/darray.h>
-#include <util/dstr.h>
-
-#include <gio/gio.h>
-#include <gio/gunixfdlist.h>
-
 #include <fcntl.h>
 #include <glad/glad.h>
 #include <linux/dma-buf.h>
@@ -43,7 +34,7 @@
 #define SPA_POD_PROP_FLAG_DONT_FIXATE (1 << 4)
 #endif
 
-#define SESSION_PATH "/org/freedesktop/portal/desktop/session/%s/obs%u"
+#include <gio/gio.h>
 
 #define CURSOR_META_SIZE(width, height)                                    \
 	(sizeof(struct spa_meta_cursor) + sizeof(struct spa_meta_bitmap) + \
@@ -62,11 +53,6 @@ struct format_info {
 };
 
 struct _obs_pipewire_data {
-	GCancellable *cancellable;
-
-	char *session_handle;
-	char *restore_token;
-
 	uint32_t pipewire_node;
 	int pipewire_fd;
 
@@ -105,7 +91,6 @@ struct _obs_pipewire_data {
 		gs_texture_t *texture;
 	} cursor;
 
-	enum portal_capture_type capture_type;
 	struct obs_video_info video_info;
 	bool negotiated;
 
@@ -143,42 +128,6 @@ static void update_pw_versions(obs_pipewire_data *obs_pw, const char *version)
 		blog(LOG_WARNING, "[pipewire] failed to parse server version");
 }
 
-static const char *capture_type_to_string(enum portal_capture_type capture_type)
-{
-	switch (capture_type) {
-	case PORTAL_CAPTURE_TYPE_MONITOR:
-		return "desktop";
-	case PORTAL_CAPTURE_TYPE_WINDOW:
-		return "window";
-	case PORTAL_CAPTURE_TYPE_VIRTUAL:
-	default:
-		return "unknown";
-	}
-	return "unknown";
-}
-
-static void new_session_path(char **out_path, char **out_token)
-{
-	static uint32_t session_token_count = 0;
-
-	session_token_count++;
-
-	if (out_token) {
-		struct dstr str;
-		dstr_init(&str);
-		dstr_printf(&str, "obs%u", session_token_count);
-		*out_token = str.array;
-	}
-
-	if (out_path) {
-		struct dstr str;
-		dstr_init(&str);
-		dstr_printf(&str, SESSION_PATH, dbus_get_sender_name(),
-			    session_token_count);
-		*out_path = str.array;
-	}
-}
-
 static void teardown_pipewire(obs_pipewire_data *obs_pw)
 {
 	if (obs_pw->thread_loop) {
@@ -202,24 +151,10 @@ static void teardown_pipewire(obs_pipewire_data *obs_pw)
 
 static void destroy_session(obs_pipewire_data *obs_pw)
 {
-	if (obs_pw->session_handle) {
-		g_dbus_connection_call(portal_get_dbus_connection(),
-				       "org.freedesktop.portal.Desktop",
-				       obs_pw->session_handle,
-				       "org.freedesktop.portal.Session",
-				       "Close", NULL, NULL,
-				       G_DBUS_CALL_FLAGS_NONE, -1, NULL, NULL,
-				       NULL);
-
-		g_clear_pointer(&obs_pw->session_handle, g_free);
-	}
-
 	obs_enter_graphics();
 	g_clear_pointer(&obs_pw->cursor.texture, gs_texture_destroy);
 	g_clear_pointer(&obs_pw->texture, gs_texture_destroy);
 	obs_leave_graphics();
-	g_cancellable_cancel(obs_pw->cancellable);
-	g_clear_object(&obs_pw->cancellable);
 }
 
 static inline bool has_effective_crop(obs_pipewire_data *obs_pw)
@@ -820,20 +755,24 @@ static const struct pw_core_events core_events = {
 	.error = on_core_error_cb,
 };
 
-static void play_pipewire_stream(obs_pipewire_data *obs_pw)
+obs_pipewire_data *obs_pipewire_new_for_node(int fd, uint32_t node)
 {
+	obs_pipewire_data *obs_pw;
 	struct spa_pod_builder pod_builder;
 	const struct spa_pod **params = NULL;
 	uint32_t n_params;
 	uint8_t params_buffer[2048];
 
+	obs_pw = bzalloc(sizeof(obs_pipewire_data));
+	obs_pw->pipewire_fd = fd;
+	obs_pw->pipewire_node = node;
 	obs_pw->thread_loop = pw_thread_loop_new("PipeWire thread loop", NULL);
 	obs_pw->context = pw_context_new(
 		pw_thread_loop_get_loop(obs_pw->thread_loop), NULL, 0);
 
 	if (pw_thread_loop_start(obs_pw->thread_loop) < 0) {
 		blog(LOG_WARNING, "Error starting threaded mainloop");
-		return;
+		goto fail;
 	}
 
 	pw_thread_loop_lock(obs_pw->thread_loop);
@@ -845,7 +784,7 @@ static void play_pipewire_stream(obs_pipewire_data *obs_pw)
 	if (!obs_pw->core) {
 		blog(LOG_WARNING, "Error creating PipeWire core: %m");
 		pw_thread_loop_unlock(obs_pw->thread_loop);
-		return;
+		goto fail;
 	}
 
 	pw_core_add_listener(obs_pw->core, &obs_pw->core_listener, &core_events,
@@ -877,11 +816,12 @@ static void play_pipewire_stream(obs_pipewire_data *obs_pw)
 		SPA_POD_BUILDER_INIT(params_buffer, sizeof(params_buffer));
 
 	obs_get_video_info(&obs_pw->video_info);
+	init_format_info(obs_pw);
 
 	if (!build_format_params(obs_pw, &pod_builder, &params, &n_params)) {
 		pw_thread_loop_unlock(obs_pw->thread_loop);
 		teardown_pipewire(obs_pw);
-		return;
+		return NULL;
 	}
 
 	pw_stream_connect(
@@ -893,427 +833,15 @@ static void play_pipewire_stream(obs_pipewire_data *obs_pw)
 
 	pw_thread_loop_unlock(obs_pw->thread_loop);
 	bfree(params);
-}
 
-/* ------------------------------------------------- */
+	return obs_pw;
 
-static void on_pipewire_remote_opened_cb(GObject *source, GAsyncResult *res,
-					 void *user_data)
-{
-	g_autoptr(GUnixFDList) fd_list = NULL;
-	g_autoptr(GVariant) result = NULL;
-	g_autoptr(GError) error = NULL;
-	obs_pipewire_data *obs_pw = user_data;
-	int fd_index;
-
-	result = g_dbus_proxy_call_with_unix_fd_list_finish(
-		G_DBUS_PROXY(source), &fd_list, res, &error);
-	if (error) {
-		if (!g_error_matches(error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
-			blog(LOG_ERROR,
-			     "[pipewire] Error retrieving pipewire fd: %s",
-			     error->message);
-		return;
-	}
-
-	g_variant_get(result, "(h)", &fd_index, &error);
-
-	obs_pw->pipewire_fd = g_unix_fd_list_get(fd_list, fd_index, &error);
-	if (error) {
-		if (!g_error_matches(error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
-			blog(LOG_ERROR,
-			     "[pipewire] Error retrieving pipewire fd: %s",
-			     error->message);
-		return;
-	}
-
-	play_pipewire_stream(obs_pw);
-}
-
-static void open_pipewire_remote(obs_pipewire_data *obs_pw)
-{
-	GVariantBuilder builder;
-
-	g_variant_builder_init(&builder, G_VARIANT_TYPE_VARDICT);
-
-	g_dbus_proxy_call_with_unix_fd_list(
-		portal_get_screencast_proxy(), "OpenPipeWireRemote",
-		g_variant_new("(oa{sv})", obs_pw->session_handle, &builder),
-		G_DBUS_CALL_FLAGS_NONE, -1, NULL, obs_pw->cancellable,
-		on_pipewire_remote_opened_cb, obs_pw);
-}
-
-/* ------------------------------------------------- */
-
-static void on_start_response_received_cb(GDBusConnection *connection,
-					  const char *sender_name,
-					  const char *object_path,
-					  const char *interface_name,
-					  const char *signal_name,
-					  GVariant *parameters, void *user_data)
-{
-	UNUSED_PARAMETER(connection);
-	UNUSED_PARAMETER(sender_name);
-	UNUSED_PARAMETER(object_path);
-	UNUSED_PARAMETER(interface_name);
-	UNUSED_PARAMETER(signal_name);
-
-	g_autoptr(GVariant) stream_properties = NULL;
-	g_autoptr(GVariant) streams = NULL;
-	g_autoptr(GVariant) result = NULL;
-	obs_pipewire_data *obs_pw = user_data;
-	GVariantIter iter;
-	uint32_t response;
-	size_t n_streams;
-
-	g_variant_get(parameters, "(u@a{sv})", &response, &result);
-
-	if (response != 0) {
-		blog(LOG_WARNING,
-		     "[pipewire] Failed to start screencast, denied or cancelled by user");
-		return;
-	}
-
-	streams =
-		g_variant_lookup_value(result, "streams", G_VARIANT_TYPE_ARRAY);
-
-	g_variant_iter_init(&iter, streams);
-
-	n_streams = g_variant_iter_n_children(&iter);
-	if (n_streams != 1) {
-		blog(LOG_WARNING,
-		     "[pipewire] Received more than one stream when only one was expected. "
-		     "This is probably a bug in the desktop portal implementation you are "
-		     "using.");
-
-		// The KDE Desktop portal implementation sometimes sends an invalid
-		// response where more than one stream is attached, and only the
-		// last one is the one we're looking for. This is the only known
-		// buggy implementation, so let's at least try to make it work here.
-		for (size_t i = 0; i < n_streams - 1; i++) {
-			g_autoptr(GVariant) throwaway_properties = NULL;
-			uint32_t throwaway_pipewire_node;
-
-			g_variant_iter_loop(&iter, "(u@a{sv})",
-					    &throwaway_pipewire_node,
-					    &throwaway_properties);
-		}
-	}
-
-	g_variant_iter_loop(&iter, "(u@a{sv})", &obs_pw->pipewire_node,
-			    &stream_properties);
-
-	if (portal_get_screencast_version() >= 4) {
-		g_autoptr(GVariant) restore_token = NULL;
-
-		g_clear_pointer(&obs_pw->restore_token, bfree);
-
-		restore_token = g_variant_lookup_value(result, "restore_token",
-						       G_VARIANT_TYPE_STRING);
-		if (restore_token)
-			obs_pw->restore_token = bstrdup(
-				g_variant_get_string(restore_token, NULL));
-
-		obs_source_save(obs_pw->source);
-	}
-
-	blog(LOG_INFO, "[pipewire] %s selected, setting up screencast",
-	     capture_type_to_string(obs_pw->capture_type));
-
-	open_pipewire_remote(obs_pw);
-}
-
-static void on_started_cb(GObject *source, GAsyncResult *res, void *user_data)
-{
-	UNUSED_PARAMETER(user_data);
-
-	g_autoptr(GVariant) result = NULL;
-	g_autoptr(GError) error = NULL;
-
-	result = g_dbus_proxy_call_finish(G_DBUS_PROXY(source), res, &error);
-	if (error) {
-		if (!g_error_matches(error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
-			blog(LOG_ERROR,
-			     "[pipewire] Error selecting screencast source: %s",
-			     error->message);
-		return;
-	}
-}
-
-static void start(obs_pipewire_data *obs_pw)
-{
-	GVariantBuilder builder;
-	dbus_request *request;
-	const char *request_token;
-
-	blog(LOG_INFO, "[pipewire] Asking for %s",
-	     capture_type_to_string(obs_pw->capture_type));
-
-	request = dbus_request_new(obs_pw->cancellable,
-				   on_start_response_received_cb, obs_pw);
-
-	request_token = dbus_request_get_token(request);
-
-	g_variant_builder_init(&builder, G_VARIANT_TYPE_VARDICT);
-	g_variant_builder_add(&builder, "{sv}", "handle_token",
-			      g_variant_new_string(request_token));
-
-	g_dbus_proxy_call(portal_get_screencast_proxy(), "Start",
-			  g_variant_new("(osa{sv})", obs_pw->session_handle, "",
-					&builder),
-			  G_DBUS_CALL_FLAGS_NONE, -1, obs_pw->cancellable,
-			  on_started_cb, obs_pw);
-}
-
-/* ------------------------------------------------- */
-
-static void on_select_source_response_received_cb(
-	GDBusConnection *connection, const char *sender_name,
-	const char *object_path, const char *interface_name,
-	const char *signal_name, GVariant *parameters, void *user_data)
-{
-	UNUSED_PARAMETER(connection);
-	UNUSED_PARAMETER(sender_name);
-	UNUSED_PARAMETER(object_path);
-	UNUSED_PARAMETER(interface_name);
-	UNUSED_PARAMETER(signal_name);
-
-	g_autoptr(GVariant) ret = NULL;
-	obs_pipewire_data *obs_pw = user_data;
-	uint32_t response;
-
-	blog(LOG_DEBUG, "[pipewire] Response to select source received");
-
-	g_variant_get(parameters, "(u@a{sv})", &response, &ret);
-
-	if (response != 0) {
-		blog(LOG_WARNING,
-		     "[pipewire] Failed to select source, denied or cancelled by user");
-		return;
-	}
-
-	start(obs_pw);
-}
-
-static void on_source_selected_cb(GObject *source, GAsyncResult *res,
-				  void *user_data)
-{
-	UNUSED_PARAMETER(user_data);
-
-	g_autoptr(GVariant) result = NULL;
-	g_autoptr(GError) error = NULL;
-
-	result = g_dbus_proxy_call_finish(G_DBUS_PROXY(source), res, &error);
-	if (error) {
-		if (!g_error_matches(error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
-			blog(LOG_ERROR,
-			     "[pipewire] Error selecting screencast source: %s",
-			     error->message);
-		return;
-	}
-}
-
-static void select_source(obs_pipewire_data *obs_pw)
-{
-	GVariantBuilder builder;
-	uint32_t available_cursor_modes;
-	dbus_request *request;
-	const char *request_token;
-
-	request = dbus_request_new(obs_pw->cancellable,
-				   on_select_source_response_received_cb,
-				   obs_pw);
-
-	request_token = dbus_request_get_token(request);
-
-	g_variant_builder_init(&builder, G_VARIANT_TYPE_VARDICT);
-	g_variant_builder_add(&builder, "{sv}", "types",
-			      g_variant_new_uint32(obs_pw->capture_type));
-	g_variant_builder_add(&builder, "{sv}", "multiple",
-			      g_variant_new_boolean(FALSE));
-	g_variant_builder_add(&builder, "{sv}", "handle_token",
-			      g_variant_new_string(request_token));
-
-	available_cursor_modes = portal_get_available_cursor_modes();
-
-	if (available_cursor_modes & PORTAL_CURSOR_MODE_METADATA)
-		g_variant_builder_add(
-			&builder, "{sv}", "cursor_mode",
-			g_variant_new_uint32(PORTAL_CURSOR_MODE_METADATA));
-	else if ((available_cursor_modes & PORTAL_CURSOR_MODE_EMBEDDED) &&
-		 obs_pw->cursor.visible)
-		g_variant_builder_add(
-			&builder, "{sv}", "cursor_mode",
-			g_variant_new_uint32(PORTAL_CURSOR_MODE_EMBEDDED));
-	else
-		g_variant_builder_add(
-			&builder, "{sv}", "cursor_mode",
-			g_variant_new_uint32(PORTAL_CURSOR_MODE_HIDDEN));
-
-	if (portal_get_screencast_version() >= 4) {
-		g_variant_builder_add(&builder, "{sv}", "persist_mode",
-				      g_variant_new_uint32(2));
-		if (obs_pw->restore_token && *obs_pw->restore_token) {
-			g_variant_builder_add(
-				&builder, "{sv}", "restore_token",
-				g_variant_new_string(obs_pw->restore_token));
-		}
-	}
-
-	g_dbus_proxy_call(portal_get_screencast_proxy(), "SelectSources",
-			  g_variant_new("(oa{sv})", obs_pw->session_handle,
-					&builder),
-			  G_DBUS_CALL_FLAGS_NONE, -1, obs_pw->cancellable,
-			  on_source_selected_cb, obs_pw);
-}
-
-/* ------------------------------------------------- */
-
-static void on_create_session_response_received_cb(
-	GDBusConnection *connection, const char *sender_name,
-	const char *object_path, const char *interface_name,
-	const char *signal_name, GVariant *parameters, void *user_data)
-{
-	UNUSED_PARAMETER(connection);
-	UNUSED_PARAMETER(sender_name);
-	UNUSED_PARAMETER(object_path);
-	UNUSED_PARAMETER(interface_name);
-	UNUSED_PARAMETER(signal_name);
-
-	g_autoptr(GVariant) session_handle_variant = NULL;
-	g_autoptr(GVariant) result = NULL;
-	obs_pipewire_data *obs_pw = user_data;
-	uint32_t response;
-
-	g_variant_get(parameters, "(u@a{sv})", &response, &result);
-
-	if (response != 0) {
-		blog(LOG_WARNING,
-		     "[pipewire] Failed to create session, denied or cancelled by user");
-		return;
-	}
-
-	blog(LOG_INFO, "[pipewire] Screencast session created");
-
-	session_handle_variant =
-		g_variant_lookup_value(result, "session_handle", NULL);
-	obs_pw->session_handle =
-		g_variant_dup_string(session_handle_variant, NULL);
-
-	select_source(obs_pw);
-}
-
-static void on_session_created_cb(GObject *source, GAsyncResult *res,
-				  void *user_data)
-{
-	UNUSED_PARAMETER(user_data);
-
-	g_autoptr(GVariant) result = NULL;
-	g_autoptr(GError) error = NULL;
-
-	result = g_dbus_proxy_call_finish(G_DBUS_PROXY(source), res, &error);
-	if (error) {
-		if (!g_error_matches(error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
-			blog(LOG_ERROR,
-			     "[pipewire] Error creating screencast session: %s",
-			     error->message);
-		return;
-	}
-}
-
-static void create_session(obs_pipewire_data *obs_pw)
-{
-	GVariantBuilder builder;
-	dbus_request *request;
-	const char *request_token;
-	char *session_token;
-
-	new_session_path(NULL, &session_token);
-
-	request = dbus_request_new(obs_pw->cancellable,
-				   on_create_session_response_received_cb,
-				   obs_pw);
-
-	request_token = dbus_request_get_token(request);
-
-	g_variant_builder_init(&builder, G_VARIANT_TYPE_VARDICT);
-	g_variant_builder_add(&builder, "{sv}", "handle_token",
-			      g_variant_new_string(request_token));
-	g_variant_builder_add(&builder, "{sv}", "session_handle_token",
-			      g_variant_new_string(session_token));
-
-	g_dbus_proxy_call(portal_get_screencast_proxy(), "CreateSession",
-			  g_variant_new("(a{sv})", &builder),
-			  G_DBUS_CALL_FLAGS_NONE, -1, obs_pw->cancellable,
-			  on_session_created_cb, obs_pw);
-
-	bfree(session_token);
-}
-
-/* ------------------------------------------------- */
-
-static gboolean init_obs_pipewire(obs_pipewire_data *obs_pw)
-{
-	GDBusConnection *connection;
-	GDBusProxy *proxy;
-
-	obs_pw->cancellable = g_cancellable_new();
-	connection = portal_get_dbus_connection();
-	if (!connection)
-		return FALSE;
-	proxy = portal_get_screencast_proxy();
-	if (!proxy)
-		return FALSE;
-
-	blog(LOG_INFO, "PipeWire initialized (sender name: %s)",
-	     dbus_get_sender_name());
-
-	create_session(obs_pw);
-
-	return TRUE;
-}
-
-static bool reload_session_cb(obs_properties_t *properties,
-			      obs_property_t *property, void *data)
-{
-	UNUSED_PARAMETER(properties);
-	UNUSED_PARAMETER(property);
-
-	obs_pipewire_data *obs_pw = data;
-
-	g_clear_pointer(&obs_pw->restore_token, bfree);
-
-	teardown_pipewire(obs_pw);
-	destroy_session(obs_pw);
-
-	init_obs_pipewire(obs_pw);
-
-	return false;
+fail:
+	obs_pipewire_destroy(obs_pw);
+	return NULL;
 }
 
 /* obs_source_info methods */
-
-void *obs_pipewire_create(enum portal_capture_type capture_type,
-			  obs_data_t *settings, obs_source_t *source)
-{
-	obs_pipewire_data *obs_pw = bzalloc(sizeof(obs_pipewire_data));
-
-	obs_pw->source = source;
-	obs_pw->settings = settings;
-	obs_pw->capture_type = capture_type;
-	obs_pw->cursor.visible = obs_data_get_bool(settings, "ShowCursor");
-	obs_pw->restore_token =
-		bstrdup(obs_data_get_string(settings, "RestoreToken"));
-
-	if (!init_obs_pipewire(obs_pw)) {
-		g_clear_pointer(&obs_pw, bfree);
-		return NULL;
-	}
-
-	init_format_info(obs_pw);
-
-	return obs_pw;
-}
 
 void obs_pipewire_destroy(obs_pipewire_data *obs_pw)
 {
@@ -1323,41 +851,9 @@ void obs_pipewire_destroy(obs_pipewire_data *obs_pw)
 	teardown_pipewire(obs_pw);
 	destroy_session(obs_pw);
 
-	g_clear_pointer(&obs_pw->restore_token, bfree);
 	clear_format_info(obs_pw);
 
 	bfree(obs_pw);
-}
-
-void obs_pipewire_save(obs_pipewire_data *obs_pw, obs_data_t *settings)
-{
-	obs_data_set_string(settings, "RestoreToken", obs_pw->restore_token);
-}
-
-void obs_pipewire_get_defaults(obs_data_t *settings)
-{
-	obs_data_set_default_bool(settings, "ShowCursor", true);
-	obs_data_set_default_string(settings, "RestoreToken", NULL);
-}
-
-obs_properties_t *obs_pipewire_get_properties(obs_pipewire_data *obs_pw,
-					      const char *reload_string_id)
-{
-	obs_properties_t *properties;
-
-	properties = obs_properties_create();
-	obs_properties_add_button2(properties, "Reload",
-				   obs_module_text(reload_string_id),
-				   reload_session_cb, obs_pw);
-	obs_properties_add_bool(properties, "ShowCursor",
-				obs_module_text("ShowCursor"));
-
-	return properties;
-}
-
-void obs_pipewire_update(obs_pipewire_data *obs_pw, obs_data_t *settings)
-{
-	obs_pw->cursor.visible = obs_data_get_bool(settings, "ShowCursor");
 }
 
 void obs_pipewire_show(obs_pipewire_data *obs_pw)
@@ -1428,8 +924,7 @@ void obs_pipewire_video_render(obs_pipewire_data *obs_pw, gs_effect_t *effect)
 	}
 }
 
-enum portal_capture_type
-obs_pipewire_get_capture_type(obs_pipewire_data *obs_pw)
+void obs_pipewire_set_show_cursor(obs_pipewire_data *obs_pw, bool show_cursor)
 {
-	return obs_pw->capture_type;
+	obs_pw->cursor.visible = show_cursor;
 }
