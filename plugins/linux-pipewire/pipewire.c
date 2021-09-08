@@ -755,13 +755,36 @@ static const struct pw_core_events core_events = {
 	.error = on_core_error_cb,
 };
 
-obs_pipewire_data *obs_pipewire_new_for_node(int fd, uint32_t node)
+static bool connect_stream(obs_pipewire_data *obs_pw, uint32_t node)
 {
-	obs_pipewire_data *obs_pw;
 	struct spa_pod_builder pod_builder;
 	const struct spa_pod **params = NULL;
 	uint32_t n_params;
 	uint8_t params_buffer[2048];
+
+	/* Stream parameters */
+	pod_builder =
+		SPA_POD_BUILDER_INIT(params_buffer, sizeof(params_buffer));
+
+	obs_get_video_info(&obs_pw->video_info);
+	init_format_info(obs_pw);
+
+	if (!build_format_params(obs_pw, &pod_builder, &params, &n_params)) {
+		return false;
+	}
+
+	pw_stream_connect(obs_pw->stream, PW_DIRECTION_INPUT, node,
+			  PW_STREAM_FLAG_AUTOCONNECT |
+				  PW_STREAM_FLAG_MAP_BUFFERS,
+			  params, n_params);
+
+	bfree(params);
+	return true;
+}
+
+obs_pipewire_data *obs_pipewire_new_for_node(int fd, uint32_t node)
+{
+	obs_pipewire_data *obs_pw;
 
 	obs_pw = bzalloc(sizeof(obs_pipewire_data));
 	obs_pw->pipewire_fd = fd;
@@ -811,28 +834,14 @@ obs_pipewire_data *obs_pipewire_new_for_node(int fd, uint32_t node)
 			       &stream_events, obs_pw);
 	blog(LOG_INFO, "[pipewire] Created stream %p", obs_pw->stream);
 
-	/* Stream parameters */
-	pod_builder =
-		SPA_POD_BUILDER_INIT(params_buffer, sizeof(params_buffer));
-
-	obs_get_video_info(&obs_pw->video_info);
-	init_format_info(obs_pw);
-
-	if (!build_format_params(obs_pw, &pod_builder, &params, &n_params)) {
+	if (!connect_stream(obs_pw, node)) {
 		pw_thread_loop_unlock(obs_pw->thread_loop);
-		teardown_pipewire(obs_pw);
-		return NULL;
+		goto fail;
 	}
-
-	pw_stream_connect(
-		obs_pw->stream, PW_DIRECTION_INPUT, obs_pw->pipewire_node,
-		PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS, params,
-		n_params);
 
 	blog(LOG_INFO, "[pipewire] Playing stream %p", obs_pw->stream);
 
 	pw_thread_loop_unlock(obs_pw->thread_loop);
-	bfree(params);
 
 	return obs_pw;
 
