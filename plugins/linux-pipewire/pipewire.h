@@ -37,6 +37,10 @@ obs_pipewire_data *obs_pipewire_new_for_node(int fd, uint32_t node,
 					     obs_source_t *source,
 					     enum obs_import_type import_type);
 
+obs_pipewire_data *obs_pipewire_new_full(struct pw_core *core,
+					 struct pw_properties *stream_props,
+					 uint32_t node, obs_source_t *source);
+
 void obs_pipewire_set_show_cursor(obs_pipewire_data *obs_pw, bool show_cursor);
 
 void obs_pipewire_destroy(obs_pipewire_data *obs_pw);

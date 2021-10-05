@@ -24,6 +24,7 @@
 
 #include <pipewire/pipewire.h>
 #include "pipewire-capture.h"
+#include "pipewire-camera.h"
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE("linux-pipewire", "en-US")
@@ -47,6 +48,9 @@ bool obs_module_load(void)
 	case OBS_NIX_PLATFORM_X11_GLX:
 		break;
 	}
+
+	// OBS PipeWire Camera
+	pipewire_camera_load();
 
 	return true;
 }

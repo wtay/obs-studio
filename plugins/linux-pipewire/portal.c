@@ -23,6 +23,7 @@
 
 static GDBusConnection *connection = NULL;
 static GDBusProxy *screencast_proxy = NULL;
+static GDBusProxy *camera_proxy = NULL;
 
 static void ensure_connection(void)
 {
@@ -33,6 +34,28 @@ static void ensure_connection(void)
 		if (error) {
 			blog(LOG_WARNING,
 			     "[portals] Error retrieving D-Bus connection: %s",
+			     error->message);
+			return;
+		}
+	}
+}
+
+static void ensure_camera_proxy(void)
+{
+	g_autoptr(GError) error = NULL;
+
+	ensure_connection();
+
+	if (!camera_proxy) {
+		camera_proxy = g_dbus_proxy_new_sync(
+			connection, G_DBUS_PROXY_FLAGS_NONE, NULL,
+			"org.freedesktop.portal.Desktop",
+			"/org/freedesktop/portal/desktop",
+			"org.freedesktop.portal.Camera", NULL, &error);
+
+		if (error) {
+			blog(LOG_WARNING,
+			     "[portals] Error retrieving D-Bus proxy: %s",
 			     error->message);
 			return;
 		}
@@ -120,6 +143,12 @@ GDBusConnection *portal_get_dbus_connection(void)
 {
 	ensure_connection();
 	return connection;
+}
+
+GDBusProxy *portal_get_camera_proxy(void)
+{
+	ensure_camera_proxy();
+	return camera_proxy;
 }
 
 GDBusProxy *portal_get_screencast_proxy(void)

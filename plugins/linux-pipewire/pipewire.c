@@ -1056,6 +1056,30 @@ fail:
 	return NULL;
 }
 
+obs_pipewire_data *obs_pipewire_new_full(struct pw_core *core,
+					 struct pw_properties *stream_props,
+					 uint32_t node, obs_source_t *source)
+{
+	obs_pipewire_data *obs_pw;
+
+	obs_pw = bzalloc(sizeof(obs_pipewire_data));
+	obs_pw->import_type = IMPORT_API_MEDIA;
+	obs_pw->source = source;
+
+	/* Stream */
+	obs_pw->stream = pw_stream_new(core, "OBS Studio", stream_props);
+	pw_stream_add_listener(obs_pw->stream, &obs_pw->stream_listener,
+			       &stream_events_media, obs_pw);
+	init_format_info_media(obs_pw);
+	blog(LOG_INFO, "[pipewire] created stream %p", obs_pw->stream);
+
+	connect_stream(obs_pw, node);
+
+	blog(LOG_INFO, "[pipewire] playing stream…");
+
+	return obs_pw;
+}
+
 /* obs_source_info methods */
 
 void obs_pipewire_destroy(obs_pipewire_data *obs_pw)

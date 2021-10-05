@@ -37,6 +37,8 @@ target_sources(
           pipewire.h
           pipewire-capture.c
           pipewire-capture.h
+          pipewire-camera.c
+          pipewire-camera.h
           portal.c
           portal.h
           dbus-requests.c
