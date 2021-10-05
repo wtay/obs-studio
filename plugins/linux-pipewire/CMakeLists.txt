@@ -48,6 +48,8 @@ target_sources(
           pipewire-utils-video.h
           portal.c
           portal.h
+          camera-portal.c
+          camera-portal.h
           screencast-portal.c
           screencast-portal.h)
 
