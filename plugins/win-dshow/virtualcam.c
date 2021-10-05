@@ -114,8 +114,8 @@ static void virtual_video(void *param, struct video_data *frame)
 }
 
 struct obs_output_info virtualcam_info = {
-	.id = "virtualcam_output",
-	.flags = OBS_OUTPUT_VIDEO,
+	.id = "dshow_output",
+	.flags = OBS_OUTPUT_VIDEO | OBS_OUTPUT_VIRTUALCAM,
 	.get_name = virtualcam_name,
 	.create = virtualcam_create,
 	.destroy = virtualcam_destroy,
