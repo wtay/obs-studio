@@ -23,8 +23,9 @@
 #include <obs-nix-platform.h>
 
 #include <pipewire/pipewire.h>
-#include "screencast-portal.h"
 #include "camera-portal.h"
+#include "screencast-portal.h"
+#include "pipewire-virtualcam.h"
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE("linux-pipewire", "en-US")
@@ -39,6 +40,9 @@ bool obs_module_load(void)
 
 	screencast_portal_load();
 	camera_portal_load();
+
+	// OBS PipeWire Virtual Camera
+	virtual_cam_register_output();
 
 	return true;
 }

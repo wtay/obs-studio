@@ -46,6 +46,8 @@ target_sources(
           pipewire-utils.h
           pipewire-utils-video.c
           pipewire-utils-video.h
+          pipewire-virtualcam.c
+          pipewire-virtualcam.h
           portal.c
           portal.h
           camera-portal.c
