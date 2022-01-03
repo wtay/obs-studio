@@ -782,7 +782,9 @@ static bool connect_stream(obs_pipewire_data *obs_pw, uint32_t node)
 	return true;
 }
 
-obs_pipewire_data *obs_pipewire_new_for_node(int fd, uint32_t node)
+obs_pipewire_data *obs_pipewire_new_for_node(int fd, uint32_t node,
+					     const char *name,
+					     struct pw_properties *props)
 {
 	obs_pipewire_data *obs_pw;
 
@@ -825,11 +827,7 @@ obs_pipewire_data *obs_pipewire_new_for_node(int fd, uint32_t node)
 	pw_thread_loop_wait(obs_pw->thread_loop);
 
 	/* Stream */
-	obs_pw->stream = pw_stream_new(
-		obs_pw->core, "OBS Studio",
-		pw_properties_new(PW_KEY_MEDIA_TYPE, "Video",
-				  PW_KEY_MEDIA_CATEGORY, "Capture",
-				  PW_KEY_MEDIA_ROLE, "Screen", NULL));
+	obs_pw->stream = pw_stream_new(obs_pw->core, name, props);
 	pw_stream_add_listener(obs_pw->stream, &obs_pw->stream_listener,
 			       &stream_events, obs_pw);
 	blog(LOG_INFO, "[pipewire] Created stream %p", obs_pw->stream);

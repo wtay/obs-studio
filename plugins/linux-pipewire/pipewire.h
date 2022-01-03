@@ -26,8 +26,9 @@
 #include "portal.h"
 
 typedef struct _obs_pipewire_data obs_pipewire_data;
-
-obs_pipewire_data *obs_pipewire_new_for_node(int fd, uint32_t node);
+obs_pipewire_data *obs_pipewire_new_for_node(int fd, uint32_t node,
+					     const char *name,
+					     struct pw_properties *props);
 
 void obs_pipewire_set_show_cursor(obs_pipewire_data *obs_pw, bool show_cursor);
 
