@@ -211,6 +211,15 @@ static const struct {
 		4,
 		"XBGR8888",
 	},
+	{
+		SPA_VIDEO_FORMAT_YUY2,
+		DRM_FORMAT_YUYV,
+		GS_UNKNOWN,
+		VIDEO_FORMAT_YUY2,
+		false,
+		2,
+		"YUYV422",
+	},
 };
 
 #define N_SUPPORTED_FORMATS \
@@ -218,6 +227,7 @@ static const struct {
 
 static const uint32_t supported_media_spa_formats[] = {
 	SPA_VIDEO_FORMAT_RGBA,
+	SPA_VIDEO_FORMAT_YUY2,
 };
 
 #define N_SUPPORTED_MEDIA_FORMATS              \
