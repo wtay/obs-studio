@@ -58,6 +58,7 @@ struct _obs_pipewire_data {
 
 	obs_source_t *source;
 	obs_data_t *settings;
+	enum obs_import_type import_type;
 
 	gs_texture_t *texture;
 
@@ -205,6 +206,17 @@ static const struct {
 #define N_SUPPORTED_FORMATS \
 	(sizeof(supported_formats) / sizeof(supported_formats[0]))
 
+static const uint32_t supported_texture_spa_formats[] = {
+	SPA_VIDEO_FORMAT_BGRA,
+	SPA_VIDEO_FORMAT_RGBA,
+	SPA_VIDEO_FORMAT_BGRx,
+	SPA_VIDEO_FORMAT_RGBx,
+};
+
+#define N_SUPPORTED_TEXTURE_FORMATS              \
+	(sizeof(supported_texture_spa_formats) / \
+	 sizeof(supported_texture_spa_formats[0]))
+
 static bool lookup_format_info_from_spa_format(
 	uint32_t spa_format, uint32_t *out_drm_format,
 	enum gs_color_format *out_gs_format, bool *out_swap_red_blue)
@@ -346,7 +358,7 @@ static bool drm_format_available(uint32_t drm_format, uint32_t *drm_formats,
 	return false;
 }
 
-static void init_format_info(obs_pipewire_data *obs_pw)
+static void init_format_info_texture(obs_pipewire_data *obs_pw)
 {
 	da_init(obs_pw->format_info);
 
@@ -359,10 +371,10 @@ static void init_format_info(obs_pipewire_data *obs_pw)
 	bool capabilities_queried = gs_query_dmabuf_capabilities(
 		&dmabuf_flags, &drm_formats, &n_drm_formats);
 
-	for (size_t i = 0; i < N_SUPPORTED_FORMATS; i++) {
+	for (size_t i = 0; i < N_SUPPORTED_TEXTURE_FORMATS; i++) {
 		struct format_info *info;
 		uint32_t drm_format,
-			spa_format = supported_formats[i].spa_format;
+			spa_format = supported_texture_spa_formats[i];
 		if (!lookup_format_info_from_spa_format(spa_format, &drm_format,
 							NULL, NULL))
 			continue;
@@ -458,7 +470,7 @@ static void renegotiate_format(void *data, uint64_t expirations)
 
 /* ------------------------------------------------- */
 
-static void on_process_cb(void *user_data)
+static void on_process_texture_cb(void *user_data)
 {
 	obs_pipewire_data *obs_pw = user_data;
 	struct spa_meta_cursor *cursor;
@@ -717,11 +729,11 @@ static void on_state_changed_cb(void *user_data, enum pw_stream_state old,
 	     error ? error : "none");
 }
 
-static const struct pw_stream_events stream_events = {
+static const struct pw_stream_events stream_events_texture = {
 	PW_VERSION_STREAM_EVENTS,
 	.state_changed = on_state_changed_cb,
 	.param_changed = on_param_changed_cb,
-	.process = on_process_cb,
+	.process = on_process_texture_cb,
 };
 
 static void on_core_info_cb(void *user_data, const struct pw_core_info *info)
@@ -771,7 +783,6 @@ static bool connect_stream(obs_pipewire_data *obs_pw, uint32_t node)
 		SPA_POD_BUILDER_INIT(params_buffer, sizeof(params_buffer));
 
 	obs_get_video_info(&obs_pw->video_info);
-	init_format_info(obs_pw);
 
 	if (!build_format_params(obs_pw, &pod_builder, &params, &n_params)) {
 		return false;
@@ -788,13 +799,17 @@ static bool connect_stream(obs_pipewire_data *obs_pw, uint32_t node)
 
 obs_pipewire_data *obs_pipewire_new_for_node(int fd, uint32_t node,
 					     const char *name,
-					     struct pw_properties *props)
+					     struct pw_properties *props,
+					     obs_source_t *source,
+					     enum obs_import_type import_type)
 {
 	obs_pipewire_data *obs_pw;
 
 	obs_pw = bzalloc(sizeof(obs_pipewire_data));
 	obs_pw->pipewire_fd = fd;
 	obs_pw->pipewire_node = node;
+	obs_pw->source = source;
+	obs_pw->import_type = import_type;
 	obs_pw->thread_loop = pw_thread_loop_new("PipeWire thread loop", NULL);
 	obs_pw->context = pw_context_new(
 		pw_thread_loop_get_loop(obs_pw->thread_loop), NULL, 0);
@@ -832,8 +847,16 @@ obs_pipewire_data *obs_pipewire_new_for_node(int fd, uint32_t node,
 
 	/* Stream */
 	obs_pw->stream = pw_stream_new(obs_pw->core, name, props);
-	pw_stream_add_listener(obs_pw->stream, &obs_pw->stream_listener,
-			       &stream_events, obs_pw);
+	switch (obs_pw->import_type) {
+	case IMPORT_API_TEXTURE:
+		pw_stream_add_listener(obs_pw->stream, &obs_pw->stream_listener,
+				       &stream_events_texture, obs_pw);
+		init_format_info_texture(obs_pw);
+		break;
+	default:
+		pw_thread_loop_unlock(obs_pw->thread_loop);
+		goto fail;
+	}
 	blog(LOG_INFO, "[pipewire] Created stream %p", obs_pw->stream);
 
 	if (!connect_stream(obs_pw, node)) {

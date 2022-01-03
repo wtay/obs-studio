@@ -26,9 +26,16 @@
 #include "portal.h"
 
 typedef struct _obs_pipewire_data obs_pipewire_data;
+enum obs_import_type {
+	IMPORT_API_TEXTURE,
+	IMPORT_API_MEDIA,
+};
+
 obs_pipewire_data *obs_pipewire_new_for_node(int fd, uint32_t node,
 					     const char *name,
-					     struct pw_properties *props);
+					     struct pw_properties *props,
+					     obs_source_t *source,
+					     enum obs_import_type import_type);
 
 void obs_pipewire_set_show_cursor(obs_pipewire_data *obs_pw, bool show_cursor);
 
