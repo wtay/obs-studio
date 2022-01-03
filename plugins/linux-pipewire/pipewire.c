@@ -216,6 +216,14 @@ static const struct {
 #define N_SUPPORTED_FORMATS \
 	(sizeof(supported_formats) / sizeof(supported_formats[0]))
 
+static const uint32_t supported_media_spa_formats[] = {
+	SPA_VIDEO_FORMAT_RGBA,
+};
+
+#define N_SUPPORTED_MEDIA_FORMATS              \
+	(sizeof(supported_media_spa_formats) / \
+	 sizeof(supported_media_spa_formats[0]))
+
 static const uint32_t supported_texture_spa_formats[] = {
 	SPA_VIDEO_FORMAT_BGRA,
 	SPA_VIDEO_FORMAT_RGBA,
@@ -251,6 +259,62 @@ lookup_format_info_from_spa_format(uint32_t spa_format,
 		return true;
 	}
 	return false;
+}
+
+static enum video_colorspace
+get_colorspace_from_spa_color_matrix(enum spa_video_color_matrix matrix)
+{
+	switch (matrix) {
+	case SPA_VIDEO_COLOR_MATRIX_RGB:
+		return VIDEO_CS_DEFAULT;
+	case SPA_VIDEO_COLOR_MATRIX_BT601:
+		return VIDEO_CS_601;
+	case SPA_VIDEO_COLOR_MATRIX_BT709:
+		return VIDEO_CS_709;
+	default:
+		return VIDEO_CS_DEFAULT;
+	}
+}
+
+static enum video_range_type
+get_colorrange_from_spa_color_range(enum spa_video_color_range colorrange)
+{
+	switch (colorrange) {
+	case SPA_VIDEO_COLOR_RANGE_0_255:
+		return VIDEO_RANGE_FULL;
+	case SPA_VIDEO_COLOR_RANGE_16_235:
+		return VIDEO_RANGE_PARTIAL;
+	default:
+		return VIDEO_RANGE_DEFAULT;
+	}
+}
+
+static bool prepare_obs_frame(obs_pipewire_data *obs_pw,
+			      struct obs_source_frame *frame)
+{
+	frame->width = obs_pw->format.info.raw.size.width;
+	frame->height = obs_pw->format.info.raw.size.height;
+	video_format_get_parameters(
+		get_colorspace_from_spa_color_matrix(
+			obs_pw->format.info.raw.color_matrix),
+		get_colorrange_from_spa_color_range(
+			obs_pw->format.info.raw.color_range),
+		frame->color_matrix, frame->color_range_min,
+		frame->color_range_max);
+	uint32_t bpp;
+	enum video_format video_format;
+	if (!lookup_format_info_from_spa_format(obs_pw->format.info.raw.format,
+						NULL, NULL, &video_format, NULL,
+						&bpp) ||
+	    video_format == VIDEO_FORMAT_NONE)
+		return false;
+
+	switch (obs_pw->format.info.raw.format) {
+	default:
+		frame->format = video_format;
+		frame->linesize[0] = SPA_ROUND_UP_N(frame->width * bpp, 4);
+	}
+	return true;
 }
 
 static void swap_texture_red_blue(gs_texture_t *texture)
@@ -375,6 +439,21 @@ static bool drm_format_available(uint32_t drm_format, uint32_t *drm_formats,
 	return false;
 }
 
+static void init_format_info_media(obs_pipewire_data *obs_pw)
+{
+	da_init(obs_pw->format_info);
+
+	for (size_t i = 0; i < N_SUPPORTED_MEDIA_FORMATS; i++) {
+		struct format_info *info;
+		uint32_t spa_format = supported_media_spa_formats[i];
+
+		info = da_push_back_new(obs_pw->format_info);
+		da_init(info->modifiers);
+		info->spa_format = spa_format;
+		info->drm_format = DRM_FORMAT_INVALID;
+	}
+}
+
 static void init_format_info_texture(obs_pipewire_data *obs_pw)
 {
 	da_init(obs_pw->format_info);
@@ -489,6 +568,65 @@ static void renegotiate_format(void *data, uint64_t expirations)
 }
 
 /* ------------------------------------------------- */
+
+static void on_process_media_cb(void *user_data)
+{
+	obs_pipewire_data *obs_pw = user_data;
+	struct spa_buffer *buffer;
+	struct pw_buffer *b;
+	bool has_buffer;
+
+	/* Find the most recent buffer */
+	b = NULL;
+	while (true) {
+		struct pw_buffer *aux =
+			pw_stream_dequeue_buffer(obs_pw->stream);
+		if (!aux)
+			break;
+		if (b)
+			pw_stream_queue_buffer(obs_pw->stream, b);
+		b = aux;
+	}
+
+	if (!b) {
+		blog(LOG_DEBUG, "[pipewire] Out of buffers!");
+		return;
+	}
+
+	buffer = b->buffer;
+	has_buffer = buffer->datas[0].chunk->size != 0;
+
+	if (!has_buffer)
+		goto done;
+
+	blog(LOG_DEBUG, "[pipewire] Buffer has memory texture");
+
+	struct obs_source_frame out = {0};
+	if (!prepare_obs_frame(obs_pw, &out)) {
+		blog(LOG_ERROR, "[pipewire] Couldn't prepare frame");
+		goto done;
+	}
+	for (unsigned int i = 0; i < buffer->n_datas && i < MAX_AV_PLANES;
+	     i++) {
+		out.data[i] = buffer->datas[i].data;
+		if (out.data[i] == NULL) {
+			blog(LOG_ERROR, "[pipewire] Failed to access data");
+			goto done;
+		}
+	}
+
+	blog(LOG_DEBUG, "[pipewire] Camera frame info: Format: %s, Planes: %u",
+	     get_video_format_name(out.format), buffer->n_datas);
+	for (unsigned int i = 0; i < buffer->n_datas && i < MAX_AV_PLANES;
+	     i++) {
+		blog(LOG_DEBUG, "[pipewire] Plane %u: Dataptr:%p, Linesize:%d",
+		     i, out.data[i], out.linesize[i]);
+	}
+
+	obs_source_output_video(obs_pw->source, &out);
+done:
+	pw_stream_queue_buffer(obs_pw->stream, b);
+}
 
 static void on_process_texture_cb(void *user_data)
 {
@@ -750,6 +888,13 @@ static void on_state_changed_cb(void *user_data, enum pw_stream_state old,
 	     error ? error : "none");
 }
 
+static const struct pw_stream_events stream_events_media = {
+	PW_VERSION_STREAM_EVENTS,
+	.state_changed = on_state_changed_cb,
+	.param_changed = on_param_changed_cb,
+	.process = on_process_media_cb,
+};
+
 static const struct pw_stream_events stream_events_texture = {
 	PW_VERSION_STREAM_EVENTS,
 	.state_changed = on_state_changed_cb,
@@ -873,6 +1018,11 @@ obs_pipewire_data *obs_pipewire_new_for_node(int fd, uint32_t node,
 		pw_stream_add_listener(obs_pw->stream, &obs_pw->stream_listener,
 				       &stream_events_texture, obs_pw);
 		init_format_info_texture(obs_pw);
+		break;
+	case IMPORT_API_MEDIA:
+		pw_stream_add_listener(obs_pw->stream, &obs_pw->stream_listener,
+				       &stream_events_media, obs_pw);
+		init_format_info_media(obs_pw);
 		break;
 	default:
 		pw_thread_loop_unlock(obs_pw->thread_loop);
