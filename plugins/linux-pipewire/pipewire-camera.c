@@ -549,7 +549,7 @@ static gboolean init_pipewire_camera(struct obs_pipewire_camera *pw_camera)
 	connection = portal_get_dbus_connection();
 	if (!connection)
 		return FALSE;
-	proxy = portal_get_screencast_proxy();
+	proxy = portal_get_camera_proxy();
 	if (!proxy)
 		return FALSE;
 
