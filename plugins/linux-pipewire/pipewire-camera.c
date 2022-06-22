@@ -574,9 +574,9 @@ static void populate_cameras_list(struct obs_pipewire_camera *pw_camera,
 		obs_property_list_add_string(
 			prop,
 			spa_dict_lookup(camera->info->props,
-					SPA_KEY_API_V4L2_CAP_CARD),
+					PW_KEY_NODE_NICK),
 			spa_dict_lookup(camera->info->props,
-					SPA_KEY_NODE_NAME));
+					PW_KEY_NODE_NAME));
 	}
 }
 
