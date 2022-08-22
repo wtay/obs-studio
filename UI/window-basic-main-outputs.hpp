@@ -16,6 +16,9 @@ struct BasicOutputHandler {
 	bool virtualCamActive = false;
 	OBSBasic *main;
 
+	obs_view_t *virtualCamView = nullptr;
+	video_t *virtualCamVideo = nullptr;
+
 	std::string outputType;
 	std::string lastError;
 
@@ -56,6 +59,8 @@ struct BasicOutputHandler {
 
 	virtual void Update() = 0;
 	virtual void SetupOutputs() = 0;
+
+	virtual void UpdateVirtualCamOutputSource();
 
 	inline bool Active() const
 	{
