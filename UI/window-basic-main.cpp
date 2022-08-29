@@ -1830,8 +1830,8 @@ void OBSBasic::OBSInit()
 	cef = obs_browser_init_panel();
 #endif
 
-	OBSDataAutoRelease obsData = obs_get_private_data();
-	vcamEnabled = obs_data_get_bool(obsData, "vcamEnabled");
+	vcamEnabled = (obs_get_output_flags(DEFAULT_VCAM_ID) &
+		       OBS_OUTPUT_VIRTUALCAM) != 0;
 	if (vcamEnabled) {
 		AddVCamButton();
 	}

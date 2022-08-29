@@ -211,17 +211,15 @@ static bool CreateAACEncoder(OBSEncoder &res, string &id, int bitrate,
 
 inline BasicOutputHandler::BasicOutputHandler(OBSBasic *main_) : main(main_)
 {
-	if (main->vcamEnabled) {
-		virtualCam = obs_output_create("virtualcam_output",
-					       "virtualcam_output", nullptr,
-					       nullptr);
+	if (!main->vcamEnabled)
+		return;
 
-		signal_handler_t *signal =
-			obs_output_get_signal_handler(virtualCam);
-		startVirtualCam.Connect(signal, "start", OBSStartVirtualCam,
-					this);
-		stopVirtualCam.Connect(signal, "stop", OBSStopVirtualCam, this);
-	}
+	virtualCam = obs_output_create(DEFAULT_VCAM_ID, "virtualcam_output",
+				       nullptr, nullptr);
+
+	signal_handler_t *signal = obs_output_get_signal_handler(virtualCam);
+	startVirtualCam.Connect(signal, "start", OBSStartVirtualCam, this);
+	stopVirtualCam.Connect(signal, "stop", OBSStopVirtualCam, this);
 }
 
 static void StopVideoDestroyView(obs_view_t *&view, video_t *&video)
