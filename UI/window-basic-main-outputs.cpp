@@ -214,10 +214,22 @@ inline BasicOutputHandler::BasicOutputHandler(OBSBasic *main_) : main(main_)
 	if (!main->vcamEnabled)
 		return;
 
-	virtualCam = obs_output_create(DEFAULT_VCAM_ID, "virtualcam_output",
-				       nullptr, nullptr);
+	size_t idx = 0;
+	size_t count = 0;
+	const char *id;
+	QString name = "virtualcam_output_%1";
+	while (obs_enum_output_types(idx++, &id)) {
 
-	signal_handler_t *signal = obs_output_get_signal_handler(virtualCam);
+		if ((obs_get_output_flags(id) & OBS_OUTPUT_VIRTUALCAM) == 0)
+			continue;
+
+		virtualCams.push_back(obs_output_create(
+			id, QT_TO_UTF8(name.arg(count)), nullptr, nullptr));
+		count++;
+	}
+
+	signal_handler_t *signal =
+		obs_output_get_signal_handler(virtualCams.back());
 	startVirtualCam.Connect(signal, "start", OBSStartVirtualCam, this);
 	stopVirtualCam.Connect(signal, "stop", OBSStopVirtualCam, this);
 }
@@ -249,16 +261,32 @@ bool BasicOutputHandler::StartVirtualCam()
 			return false;
 	}
 
-	obs_output_set_media(virtualCam, virtualCamVideo, obs_get_audio());
+	size_t count = virtualCams.size();
+	for (size_t i = 0; i < count; i++)
+		obs_output_set_media(virtualCams[i], virtualCamVideo,
+				     obs_get_audio());
+
 	if (!Active())
 		SetupOutputs();
 
-	bool success = obs_output_start(virtualCam);
+	bool fail = false;
+	for (size_t i = 0; i < count; i++) {
+		fail |= !obs_output_start(virtualCams[i]);
+		if (fail)
+			break;
+	}
 
-	if (!success)
+	if (fail) {
+		for (size_t i = 0; i < count; i++) {
+			if (obs_output_active(virtualCams[i]))
+				obs_output_stop(virtualCams[i]);
+			obs_output_set_media(virtualCams[i], nullptr, nullptr);
+		}
+
 		StopVideoDestroyView(virtualCamView, virtualCamVideo);
+	}
 
-	return success;
+	return !fail;
 }
 
 void BasicOutputHandler::StopVirtualCam()
@@ -266,17 +294,26 @@ void BasicOutputHandler::StopVirtualCam()
 	if (!main->vcamEnabled)
 		return;
 
-	obs_output_stop(virtualCam);
-	obs_output_set_media(virtualCam, nullptr, nullptr);
+	size_t count = virtualCams.size();
+	for (size_t i = 0; i < count; i++) {
+		obs_output_stop(virtualCams[i]);
+		obs_output_set_media(virtualCams[i], nullptr, nullptr);
+	}
+
 	StopVideoDestroyView(virtualCamView, virtualCamVideo);
 }
 
 bool BasicOutputHandler::VirtualCamActive() const
 {
-	if (main->vcamEnabled) {
-		return obs_output_active(virtualCam);
-	}
-	return false;
+	if (!main->vcamEnabled)
+		return false;
+
+	bool active = false;
+	size_t count = virtualCams.size();
+	for (size_t i = 0; i < count; i++)
+		active |= obs_output_active(virtualCams[i]);
+
+	return active;
 }
 
 void BasicOutputHandler::UpdateVirtualCamOutputSource()

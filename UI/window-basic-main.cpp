@@ -1830,8 +1830,12 @@ void OBSBasic::OBSInit()
 	cef = obs_browser_init_panel();
 #endif
 
-	vcamEnabled = (obs_get_output_flags(DEFAULT_VCAM_ID) &
-		       OBS_OUTPUT_VIRTUALCAM) != 0;
+	size_t idx = 0;
+	const char *id;
+	while (obs_enum_output_types(idx++, &id)) {
+		vcamEnabled |=
+			(obs_get_output_flags(id) & OBS_OUTPUT_VIRTUALCAM) != 0;
+	}
 	if (vcamEnabled) {
 		AddVCamButton();
 	}
@@ -7573,7 +7577,7 @@ void OBSBasic::ReplayBufferStop(int code)
 
 void OBSBasic::StartVirtualCam()
 {
-	if (!outputHandler || !outputHandler->virtualCam)
+	if (!outputHandler || outputHandler->virtualCams.empty())
 		return;
 	if (outputHandler->VirtualCamActive())
 		return;
@@ -7589,7 +7593,7 @@ void OBSBasic::StartVirtualCam()
 
 void OBSBasic::StopVirtualCam()
 {
-	if (!outputHandler || !outputHandler->virtualCam)
+	if (!outputHandler || outputHandler->virtualCams.empty())
 		return;
 
 	SaveProject();
@@ -7602,7 +7606,7 @@ void OBSBasic::StopVirtualCam()
 
 void OBSBasic::OnVirtualCamStart()
 {
-	if (!outputHandler || !outputHandler->virtualCam)
+	if (!outputHandler || outputHandler->virtualCams.empty())
 		return;
 
 	vcamButton->first()->setText(QTStr("Basic.Main.StopVirtualCam"));
@@ -7620,7 +7624,7 @@ void OBSBasic::OnVirtualCamStart()
 
 void OBSBasic::OnVirtualCamStop(int)
 {
-	if (!outputHandler || !outputHandler->virtualCam)
+	if (!outputHandler || outputHandler->virtualCams.empty())
 		return;
 
 	vcamButton->first()->setText(QTStr("Basic.Main.StartVirtualCam"));
