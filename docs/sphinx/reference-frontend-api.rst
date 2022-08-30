@@ -742,6 +742,19 @@ Functions
    :return: A new reference to the current virtual camera output.
             Release with :c:func:`obs_output_release()`.
 
+   .. deprecated:: 28.1.0
+   Use :c:func:`obs_frontend_get_virtualcam_output2()` instead.
+
+---------------------------------------
+
+.. function:: obs_output_t *obs_frontend_get_virtualcam_output2(size_t idx)
+
+   Since 28.1.0, multiple virtual camera implementation can be used
+   simultaneously.
+
+   :param idx: Index of the chosen virtual camera implementation output
+   :return: A new reference to the chosen virtual camera output
+
 ---------------------------------------
 
 .. function:: void obs_frontend_start_virtualcam(void)

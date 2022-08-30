@@ -596,6 +596,15 @@ struct OBSStudioAPI : obs_frontend_callbacks {
 		return obs_output_get_ref(output);
 	}
 
+	obs_output_t *obs_frontend_get_virtualcam_output2(size_t idx) override
+	{
+		if (idx >= main->outputHandler->virtualCams.size())
+			return nullptr;
+
+		OBSOutput output = main->outputHandler->virtualCams[idx].Get();
+		return obs_output_get_ref(output);
+	}
+
 	void obs_frontend_start_virtualcam(void) override
 	{
 		QMetaObject::invokeMethod(main, "StartVirtualCam");
