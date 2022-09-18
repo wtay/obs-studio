@@ -19,6 +19,9 @@
  */
 
 #include "pipewire.h"
+#include "pipewire-internal.h"
+#include "pipewire-utils.h"
+#include "pipewire-utils-video.h"
 
 #include <util/darray.h>
 
@@ -39,18 +42,6 @@
 #define CURSOR_META_SIZE(width, height)                                    \
 	(sizeof(struct spa_meta_cursor) + sizeof(struct spa_meta_bitmap) + \
 	 width * height * 4)
-
-struct obs_pw_version {
-	int major;
-	int minor;
-	int micro;
-};
-
-struct format_info {
-	uint32_t spa_format;
-	uint32_t drm_format;
-	DARRAY(uint64_t) modifiers;
-};
 
 struct _obs_pipewire {
 	int pipewire_fd;
@@ -82,11 +73,7 @@ struct _obs_pipewire_stream {
 
 	struct spa_video_info format;
 
-	struct {
-		bool valid;
-		int x, y;
-		uint32_t width, height;
-	} crop;
+	struct obs_pw_region crop;
 
 	struct {
 		bool visible;
@@ -110,16 +97,6 @@ static bool parse_pw_version(struct obs_pw_version *dst, const char *version)
 	int n_matches = sscanf(version, "%d.%d.%d", &dst->major, &dst->minor,
 			       &dst->micro);
 	return n_matches == 3;
-}
-
-static bool check_pw_version(const struct obs_pw_version *pw_version, int major,
-			     int minor, int micro)
-{
-	if (pw_version->major != major)
-		return pw_version->major > major;
-	if (pw_version->minor != minor)
-		return pw_version->minor > minor;
-	return pw_version->micro >= micro;
 }
 
 static void update_pw_versions(obs_pipewire *obs_pw, const char *version)
@@ -150,111 +127,6 @@ static void teardown_pipewire(obs_pipewire *obs_pw)
 	}
 }
 
-static inline bool has_effective_crop(obs_pipewire_stream *obs_pw_stream)
-{
-	return obs_pw_stream->crop.valid &&
-	       (obs_pw_stream->crop.x != 0 || obs_pw_stream->crop.y != 0 ||
-		obs_pw_stream->crop.width <
-			obs_pw_stream->format.info.raw.size.width ||
-		obs_pw_stream->crop.height <
-			obs_pw_stream->format.info.raw.size.height);
-}
-
-struct format_data {
-	uint32_t spa_format;
-	uint32_t drm_format;
-	enum gs_color_format gs_format;
-	enum video_format video_format;
-	bool swap_red_blue;
-	uint32_t bpp;
-	const char *pretty_name;
-};
-
-static const struct format_data supported_formats[] = {
-	{
-		SPA_VIDEO_FORMAT_BGRA,
-		DRM_FORMAT_ARGB8888,
-		GS_BGRA,
-		VIDEO_FORMAT_BGRA,
-		false,
-		4,
-		"ARGB8888",
-	},
-	{
-		SPA_VIDEO_FORMAT_RGBA,
-		DRM_FORMAT_ABGR8888,
-		GS_RGBA,
-		VIDEO_FORMAT_RGBA,
-		false,
-		4,
-		"ABGR8888",
-	},
-	{
-		SPA_VIDEO_FORMAT_BGRx,
-		DRM_FORMAT_XRGB8888,
-		GS_BGRX,
-		VIDEO_FORMAT_BGRX,
-		false,
-		4,
-		"XRGB8888",
-	},
-	{
-		SPA_VIDEO_FORMAT_RGBx,
-		DRM_FORMAT_XBGR8888,
-		GS_BGRX,
-		VIDEO_FORMAT_NONE,
-		true,
-		4,
-		"XBGR8888",
-	},
-	{
-		SPA_VIDEO_FORMAT_YUY2,
-		DRM_FORMAT_YUYV,
-		GS_UNKNOWN,
-		VIDEO_FORMAT_YUY2,
-		false,
-		2,
-		"YUYV422",
-	},
-};
-
-#define N_SUPPORTED_FORMATS \
-	(sizeof(supported_formats) / sizeof(supported_formats[0]))
-
-static const uint32_t supported_formats_async[] = {
-	SPA_VIDEO_FORMAT_RGBA,
-	SPA_VIDEO_FORMAT_YUY2,
-};
-
-#define N_SUPPORTED_FORMATS_ASYNC \
-	(sizeof(supported_formats_async) / sizeof(supported_formats_async[0]))
-
-static const uint32_t supported_formats_sync[] = {
-	SPA_VIDEO_FORMAT_BGRA,
-	SPA_VIDEO_FORMAT_RGBA,
-	SPA_VIDEO_FORMAT_BGRx,
-	SPA_VIDEO_FORMAT_RGBx,
-};
-
-#define N_SUPPORTED_FORMATS_SYNC \
-	(sizeof(supported_formats_sync) / sizeof(supported_formats_sync[0]))
-
-static bool
-lookup_format_info_from_spa_format(uint32_t spa_format,
-				   struct format_data *out_format_data)
-{
-	for (size_t i = 0; i < N_SUPPORTED_FORMATS; i++) {
-		if (supported_formats[i].spa_format != spa_format)
-			continue;
-
-		if (out_format_data)
-			*out_format_data = supported_formats[i];
-
-		return true;
-	}
-	return false;
-}
-
 static void swap_texture_red_blue(gs_texture_t *texture)
 {
 	GLuint gl_texure = *(GLuint *)gs_texture_get_obj(texture);
@@ -265,189 +137,6 @@ static void swap_texture_red_blue(gs_texture_t *texture)
 	glBindTexture(GL_TEXTURE_2D, 0);
 }
 
-static inline struct spa_pod *build_format(struct spa_pod_builder *b,
-					   struct obs_video_info *ovi,
-					   uint32_t format, uint64_t *modifiers,
-					   size_t modifier_count)
-{
-	struct spa_pod_frame format_frame;
-
-	/* Make an object of type SPA_TYPE_OBJECT_Format and id SPA_PARAM_EnumFormat.
-	 * The object type is important because it defines the properties that are
-	 * acceptable. The id gives more context about what the object is meant to
-	 * contain. In this case we enumerate supported formats. */
-	spa_pod_builder_push_object(b, &format_frame, SPA_TYPE_OBJECT_Format,
-				    SPA_PARAM_EnumFormat);
-	/* add media type and media subtype properties */
-	spa_pod_builder_add(b, SPA_FORMAT_mediaType,
-			    SPA_POD_Id(SPA_MEDIA_TYPE_video), 0);
-	spa_pod_builder_add(b, SPA_FORMAT_mediaSubtype,
-			    SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw), 0);
-
-	/* formats */
-	spa_pod_builder_add(b, SPA_FORMAT_VIDEO_format, SPA_POD_Id(format), 0);
-
-	/* modifier */
-	if (modifier_count > 0) {
-		struct spa_pod_frame modifier_frame;
-
-		/* build an enumeration of modifiers */
-		spa_pod_builder_prop(b, SPA_FORMAT_VIDEO_modifier,
-				     SPA_POD_PROP_FLAG_MANDATORY |
-					     SPA_POD_PROP_FLAG_DONT_FIXATE);
-
-		spa_pod_builder_push_choice(b, &modifier_frame, SPA_CHOICE_Enum,
-					    0);
-
-		/* The first element of choice pods is the preferred value. Here
-		 * we arbitrarily pick the first modifier as the preferred one.
-		 */
-		spa_pod_builder_long(b, modifiers[0]);
-
-		/* modifiers from  an array */
-		for (uint32_t i = 0; i < modifier_count; i++)
-			spa_pod_builder_long(b, modifiers[i]);
-
-		spa_pod_builder_pop(b, &modifier_frame);
-	}
-	/* add size and framerate ranges */
-	spa_pod_builder_add(b, SPA_FORMAT_VIDEO_size,
-			    SPA_POD_CHOICE_RANGE_Rectangle(
-				    &SPA_RECTANGLE(320, 240), // Arbitrary
-				    &SPA_RECTANGLE(1, 1),
-				    &SPA_RECTANGLE(8192, 4320)),
-			    SPA_FORMAT_VIDEO_framerate,
-			    SPA_POD_CHOICE_RANGE_Fraction(
-				    &SPA_FRACTION(ovi->fps_num, ovi->fps_den),
-				    &SPA_FRACTION(0, 1), &SPA_FRACTION(360, 1)),
-			    0);
-	return spa_pod_builder_pop(b, &format_frame);
-}
-
-static bool build_format_params(obs_pipewire_stream *obs_pw_stream,
-				struct spa_pod_builder *pod_builder,
-				const struct spa_pod ***param_list,
-				uint32_t *n_params)
-{
-	obs_pipewire *obs_pw = obs_pw_stream->obs_pw;
-	uint32_t params_count = 0;
-
-	const struct spa_pod **params;
-	params = bzalloc(2 * obs_pw_stream->format_info.num *
-			 sizeof(struct spa_pod *));
-
-	if (!params) {
-		blog(LOG_ERROR,
-		     "[pipewire] Failed to allocate memory for param pointers");
-		return false;
-	}
-
-	if (!check_pw_version(&obs_pw->server_version, 0, 3, 33))
-		goto build_shm;
-
-	for (size_t i = 0; i < obs_pw_stream->format_info.num; i++) {
-		if (obs_pw_stream->format_info.array[i].modifiers.num == 0) {
-			continue;
-		}
-		params[params_count++] = build_format(
-			pod_builder, &obs_pw_stream->video_info,
-			obs_pw_stream->format_info.array[i].spa_format,
-			obs_pw_stream->format_info.array[i].modifiers.array,
-			obs_pw_stream->format_info.array[i].modifiers.num);
-	}
-
-build_shm:
-	for (size_t i = 0; i < obs_pw_stream->format_info.num; i++) {
-		params[params_count++] = build_format(
-			pod_builder, &obs_pw_stream->video_info,
-			obs_pw_stream->format_info.array[i].spa_format, NULL,
-			0);
-	}
-	*param_list = params;
-	*n_params = params_count;
-	return true;
-}
-
-static bool drm_format_available(uint32_t drm_format, uint32_t *drm_formats,
-				 size_t n_drm_formats)
-{
-	for (size_t j = 0; j < n_drm_formats; j++) {
-		if (drm_format == drm_formats[j]) {
-			return true;
-		}
-	}
-	return false;
-}
-
-static void init_format_info_async(obs_pipewire_stream *obs_pw_stream)
-{
-	da_init(obs_pw_stream->format_info);
-
-	for (size_t i = 0; i < N_SUPPORTED_FORMATS_ASYNC; i++) {
-		struct format_info *info, tmp;
-		if (!lookup_format_info_from_spa_format(
-			    supported_formats_async[i], &tmp))
-			continue;
-
-		info = da_push_back_new(obs_pw_stream->format_info);
-		da_init(info->modifiers);
-		info->spa_format = tmp.spa_format;
-		info->drm_format = tmp.drm_format;
-	}
-}
-
-static void init_format_info_sync(obs_pipewire_stream *obs_pw_stream)
-{
-	da_init(obs_pw_stream->format_info);
-
-	obs_enter_graphics();
-
-	enum gs_dmabuf_flags dmabuf_flags;
-	uint32_t *drm_formats = NULL;
-	size_t n_drm_formats;
-
-	bool capabilities_queried = gs_query_dmabuf_capabilities(
-		&dmabuf_flags, &drm_formats, &n_drm_formats);
-
-	for (size_t i = 0; i < N_SUPPORTED_FORMATS_SYNC; i++) {
-		struct format_info *info, tmp;
-
-		if (!lookup_format_info_from_spa_format(
-			    supported_formats_sync[i], &tmp))
-			continue;
-
-		if (!drm_format_available(tmp.drm_format, drm_formats,
-					  n_drm_formats))
-			continue;
-
-		info = da_push_back_new(obs_pw_stream->format_info);
-		da_init(info->modifiers);
-		info->spa_format = tmp.spa_format;
-		info->drm_format = tmp.drm_format;
-
-		if (!capabilities_queried)
-			continue;
-
-		size_t n_modifiers;
-		uint64_t *modifiers = NULL;
-		if (gs_query_dmabuf_modifiers_for_format(
-			    tmp.drm_format, &modifiers, &n_modifiers)) {
-			da_push_back_array(info->modifiers, modifiers,
-					   n_modifiers);
-		}
-		bfree(modifiers);
-
-		if (dmabuf_flags &
-		    GS_DMABUF_FLAG_IMPLICIT_MODIFIERS_SUPPORTED) {
-			uint64_t modifier_implicit = DRM_FORMAT_MOD_INVALID;
-			da_push_back(info->modifiers, &modifier_implicit);
-		}
-	}
-	obs_leave_graphics();
-
-	bfree(drm_formats);
-}
-
 static void init_format_info(obs_pipewire_stream *obs_pw_stream)
 {
 	uint32_t output_flags;
@@ -456,49 +145,11 @@ static void init_format_info(obs_pipewire_stream *obs_pw_stream)
 
 	if (output_flags & OBS_SOURCE_VIDEO) {
 		if (output_flags & OBS_SOURCE_ASYNC)
-			init_format_info_async(obs_pw_stream);
+			obs_pw_stream->format_info.da =
+				create_format_info_async();
 		else
-			init_format_info_sync(obs_pw_stream);
-	}
-}
-
-static void clear_format_info(obs_pipewire_stream *obs_pw_stream)
-{
-	for (size_t i = 0; i < obs_pw_stream->format_info.num; i++) {
-		da_free(obs_pw_stream->format_info.array[i].modifiers);
-	}
-	da_free(obs_pw_stream->format_info);
-}
-
-static void remove_modifier_from_format(obs_pipewire_stream *obs_pw_stream,
-					uint32_t spa_format, uint64_t modifier)
-{
-	obs_pipewire *obs_pw = obs_pw_stream->obs_pw;
-
-	for (size_t i = 0; i < obs_pw_stream->format_info.num; i++) {
-		if (obs_pw_stream->format_info.array[i].spa_format !=
-		    spa_format)
-			continue;
-
-		if (!check_pw_version(&obs_pw->server_version, 0, 3, 40)) {
-			da_erase_range(
-				obs_pw_stream->format_info.array[i].modifiers,
-				0,
-				obs_pw_stream->format_info.array[i]
-						.modifiers.num -
-					1);
-			continue;
-		}
-
-		int idx = da_find(obs_pw_stream->format_info.array[i].modifiers,
-				  &modifier, 0);
-		while (idx != -1) {
-			da_erase(obs_pw_stream->format_info.array[i].modifiers,
-				 idx);
-			idx = da_find(
-				obs_pw_stream->format_info.array[i].modifiers,
-				&modifier, 0);
-		}
+			obs_pw_stream->format_info.da =
+				create_format_info_sync();
 	}
 }
 
@@ -517,8 +168,10 @@ static void renegotiate_format(void *data, uint64_t expirations)
 	struct spa_pod_builder pod_builder =
 		SPA_POD_BUILDER_INIT(params_buffer, sizeof(params_buffer));
 	uint32_t n_params;
-	if (!build_format_params(obs_pw_stream, &pod_builder, &params,
-				 &n_params)) {
+	if (!build_format_params(&obs_pw_stream->format_info,
+				 &obs_pw->server_version,
+				 &obs_pw_stream->video_info, &pod_builder,
+				 &params, &n_params)) {
 		teardown_pipewire(obs_pw);
 		pw_thread_loop_unlock(obs_pw->thread_loop);
 		return;
@@ -720,7 +373,8 @@ static void process_video_sync(obs_pipewire_stream *obs_pw_stream)
 
 		if (obs_pw_stream->texture == NULL) {
 			remove_modifier_from_format(
-				obs_pw_stream,
+				&obs_pw_stream->format_info.da,
+				&obs_pw_stream->obs_pw->server_version,
 				obs_pw_stream->format.info.raw.format,
 				obs_pw_stream->format.info.raw.modifier);
 			pw_loop_signal_event(
@@ -948,10 +602,8 @@ static void on_core_info_cb(void *user_data, const struct pw_core_info *info)
 static void on_core_error_cb(void *user_data, uint32_t id, int seq, int res,
 			     const char *message)
 {
-	obs_pipewire_data *obs_pw = user_data;
-	UNUSED_PARAMETER(seq);
-
 	obs_pipewire *obs_pw = user_data;
+	UNUSED_PARAMETER(seq);
 
 	blog(LOG_ERROR, "[pipewire] Error id:%u seq:%d res:%d (%s): %s", id,
 	     seq, res, g_strerror(res), message);
@@ -1104,8 +756,10 @@ obs_pipewire_connect_stream(obs_pipewire *obs_pw, obs_source_t *source,
 
 	obs_get_video_info(&obs_pw_stream->video_info);
 
-	if (!build_format_params(obs_pw_stream, &pod_builder, &params,
-				 &n_params)) {
+	if (!build_format_params(&obs_pw_stream->format_info,
+				 &obs_pw->server_version,
+				 &obs_pw_stream->video_info, &pod_builder,
+				 &params, &n_params)) {
 		pw_thread_loop_unlock(obs_pw->thread_loop);
 		bfree(obs_pw_stream);
 		return NULL;
@@ -1171,7 +825,7 @@ void obs_pipewire_stream_video_render(obs_pipewire_stream *obs_pw_stream,
 	image = gs_effect_get_param_by_name(effect, "image");
 	gs_effect_set_texture(image, obs_pw_stream->texture);
 
-	if (has_effective_crop(obs_pw_stream)) {
+	if (has_effective_crop(&obs_pw_stream->crop, &obs_pw_stream->format)) {
 		gs_draw_sprite_subregion(obs_pw_stream->texture, 0,
 					 obs_pw_stream->crop.x,
 					 obs_pw_stream->crop.y,
@@ -1228,6 +882,6 @@ void obs_pipewire_stream_destroy(obs_pipewire_stream *obs_pw_stream)
 		pw_stream_disconnect(obs_pw_stream->stream);
 	g_clear_pointer(&obs_pw_stream->stream, pw_stream_destroy);
 
-	clear_format_info(obs_pw_stream);
+	clear_format_info(&obs_pw_stream->format_info.da);
 	bfree(obs_pw_stream);
 }

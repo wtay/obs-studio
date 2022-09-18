@@ -35,6 +35,11 @@ target_sources(
   PRIVATE linux-pipewire.c
           pipewire.c
           pipewire.h
+          pipewire-internal.h
+          pipewire-utils.c
+          pipewire-utils.h
+          pipewire-utils-video.c
+          pipewire-utils-video.h
           portal.c
           portal.h
           screencast-portal.c
