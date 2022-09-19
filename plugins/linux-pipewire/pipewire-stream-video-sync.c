@@ -1,6 +1,7 @@
-/* pipewire.c
+/* pipewire-stream-video-sync.c
  *
  * Copyright 2020 Georges Basile Stavracas Neto <georges.stavracas@gmail.com>
+ * Copyright 2022 columbarius <co1umbarius@protonmail.com>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -80,118 +81,28 @@ static void swap_texture_red_blue(gs_texture_t *texture)
 	glBindTexture(GL_TEXTURE_2D, 0);
 }
 
-static void init_format_info(struct _obs_pipewire_stream_video *video_stream)
+/* obs_pipewire_stream methods */
+
+static const struct _obs_pipewire_stream_impl stream_impl;
+
+static bool
+obs_pipewire_stream_is_video_stream(obs_pipewire_stream *obs_pw_stream)
 {
-	uint32_t output_flags;
-
-	output_flags = obs_source_get_output_flags(video_stream->source);
-
-	if (output_flags & OBS_SOURCE_VIDEO) {
-		if (output_flags & OBS_SOURCE_ASYNC)
-			video_stream->format_info.da =
-				create_format_info_async();
-		else
-			video_stream->format_info.da =
-				create_format_info_sync();
-	}
+	return obs_pw_stream->impl == &stream_impl;
 }
 
-/* ------------------------------------------------- */
-
-static enum video_colorspace
-video_colorspace_from_spa_color_matrix(enum spa_video_color_matrix matrix)
+static struct _obs_pipewire_stream_video *
+video_stream_get_stream(obs_pipewire_stream *obs_pw_stream)
 {
-	switch (matrix) {
-	case SPA_VIDEO_COLOR_MATRIX_RGB:
-		return VIDEO_CS_DEFAULT;
-	case SPA_VIDEO_COLOR_MATRIX_BT601:
-		return VIDEO_CS_601;
-	case SPA_VIDEO_COLOR_MATRIX_BT709:
-		return VIDEO_CS_709;
-	default:
-		return VIDEO_CS_DEFAULT;
-	}
+	assert(obs_pipewire_stream_is_video_stream(obs_pw_stream));
+	return (struct _obs_pipewire_stream_video *)obs_pw_stream;
 }
 
-static enum video_range_type
-video_color_range_from_spa_color_range(enum spa_video_color_range colorrange)
+static void video_stream_process_buffer(obs_pipewire_stream *obs_pw_stream,
+					struct pw_buffer *b)
 {
-	switch (colorrange) {
-	case SPA_VIDEO_COLOR_RANGE_0_255:
-		return VIDEO_RANGE_FULL;
-	case SPA_VIDEO_COLOR_RANGE_16_235:
-		return VIDEO_RANGE_PARTIAL;
-	default:
-		return VIDEO_RANGE_DEFAULT;
-	}
-}
-
-static bool prepare_obs_frame(struct spa_video_info *format,
-			      struct obs_source_frame *frame)
-{
-	struct format_data format_data;
-
-	frame->width = format->info.raw.size.width;
-	frame->height = format->info.raw.size.height;
-
-	video_format_get_parameters(video_colorspace_from_spa_color_matrix(
-					    format->info.raw.color_matrix),
-				    video_color_range_from_spa_color_range(
-					    format->info.raw.color_range),
-				    frame->color_matrix, frame->color_range_min,
-				    frame->color_range_max);
-
-	if (!lookup_format_info_from_spa_format(format->info.raw.format,
-						&format_data) ||
-	    format_data.video_format == VIDEO_FORMAT_NONE)
-		return false;
-
-	frame->format = format_data.video_format;
-	frame->linesize[0] = SPA_ROUND_UP_N(frame->width * format_data.bpp, 4);
-	return true;
-}
-
-static void process_video_async(struct _obs_pipewire_stream_video *video_stream,
-				struct pw_buffer *b)
-{
-	struct spa_buffer *buffer;
-	bool has_buffer;
-
-	buffer = b->buffer;
-	has_buffer = buffer->datas[0].chunk->size != 0;
-
-	if (!has_buffer)
-		return;
-
-	blog(LOG_DEBUG, "[pipewire] Buffer has memory texture");
-
-	struct obs_source_frame out = {0};
-	if (!prepare_obs_frame(&video_stream->format, &out)) {
-		blog(LOG_ERROR, "[pipewire] Couldn't prepare frame");
-		return;
-	}
-
-	for (uint32_t i = 0; i < buffer->n_datas && i < MAX_AV_PLANES; i++) {
-		out.data[i] = buffer->datas[i].data;
-		if (out.data[i] == NULL) {
-			blog(LOG_ERROR, "[pipewire] Failed to access data");
-			return;
-		}
-	}
-
-	blog(LOG_DEBUG, "[pipewire] Camera frame info: Format: %s, Planes: %u",
-	     get_video_format_name(out.format), buffer->n_datas);
-	for (uint32_t i = 0; i < buffer->n_datas && i < MAX_AV_PLANES; i++) {
-		blog(LOG_DEBUG, "[pipewire] Plane %u: Dataptr:%p, Linesize:%d",
-		     i, out.data[i], out.linesize[i]);
-	}
-
-	obs_source_output_video(video_stream->source, &out);
-}
-
-static void process_video_sync(struct _obs_pipewire_stream_video *video_stream,
-			       struct pw_buffer *b)
-{
+	struct _obs_pipewire_stream_video *video_stream =
+		video_stream_get_stream(obs_pw_stream);
 	struct spa_meta_cursor *cursor;
 	struct spa_meta_region *region;
 	struct format_data format_data;
@@ -349,40 +260,6 @@ read_metadata:
 	obs_leave_graphics();
 }
 
-/* obs_pipewire_stream methods */
-
-static const struct _obs_pipewire_stream_impl stream_impl;
-
-static bool
-obs_pipewire_stream_is_video_stream(obs_pipewire_stream *obs_pw_stream)
-{
-	return obs_pw_stream->impl == &stream_impl;
-}
-
-static struct _obs_pipewire_stream_video *
-video_stream_get_stream(obs_pipewire_stream *obs_pw_stream)
-{
-	assert(obs_pipewire_stream_is_video_stream(obs_pw_stream));
-	return (struct _obs_pipewire_stream_video *)obs_pw_stream;
-}
-
-static void video_stream_process_buffer(obs_pipewire_stream *obs_pw_stream,
-					struct pw_buffer *b)
-{
-	struct _obs_pipewire_stream_video *video_stream =
-		video_stream_get_stream(obs_pw_stream);
-	uint32_t output_flags;
-
-	output_flags = obs_source_get_output_flags(video_stream->source);
-
-	if (output_flags & OBS_SOURCE_VIDEO) {
-		if (output_flags & OBS_SOURCE_ASYNC)
-			process_video_async(video_stream, b);
-		else
-			process_video_sync(video_stream, b);
-	}
-}
-
 static void video_stream_param_changed(obs_pipewire_stream *obs_pw_stream,
 				       uint32_t id, const struct spa_pod *param)
 {
@@ -390,7 +267,6 @@ static void video_stream_param_changed(obs_pipewire_stream *obs_pw_stream,
 		video_stream_get_stream(obs_pw_stream);
 	struct spa_pod_builder pod_builder;
 	const struct spa_pod *params[3];
-	uint32_t output_flags;
 	uint32_t buffer_types;
 	uint8_t params_buffer[1024];
 	int result;
@@ -409,17 +285,14 @@ static void video_stream_param_changed(obs_pipewire_stream *obs_pw_stream,
 
 	spa_format_video_raw_parse(param, &video_stream->format.info.raw);
 
-	output_flags = obs_source_get_output_flags(video_stream->source);
-
 	buffer_types = 1 << SPA_DATA_MemPtr;
 	bool has_modifier =
 		spa_pod_find_prop(param, NULL, SPA_FORMAT_VIDEO_modifier) !=
 		NULL;
-	if ((has_modifier ||
-	     check_pw_version(obs_pipewire_stream_get_serverversion(
-				      &video_stream->obs_pw_stream),
-			      0, 3, 24)) &&
-	    (output_flags & OBS_SOURCE_ASYNC_VIDEO) != OBS_SOURCE_ASYNC_VIDEO)
+	if (has_modifier ||
+	    check_pw_version(obs_pipewire_stream_get_serverversion(
+				     &video_stream->obs_pw_stream),
+			     0, 3, 24))
 		buffer_types |= 1 << SPA_DATA_DmaBuf;
 
 	blog(LOG_INFO, "[pipewire] Negotiated format:");
@@ -560,18 +433,13 @@ void video_stream_set_cursor_visible(obs_pipewire_stream *obs_pw_stream,
 	video_stream->cursor.visible = cursor_visible;
 }
 
-void video_stream_destroy(obs_pipewire_stream *obs_pw_stream)
+static void video_stream_destroy(obs_pipewire_stream *obs_pw_stream)
 {
 	struct _obs_pipewire_stream_video *video_stream =
 		video_stream_get_stream(obs_pw_stream);
-	uint32_t output_flags;
 
 	if (!obs_pw_stream)
 		return;
-
-	output_flags = obs_source_get_output_flags(video_stream->source);
-	if (output_flags & OBS_SOURCE_ASYNC_VIDEO)
-		obs_source_output_video(video_stream->source, NULL);
 
 	obs_enter_graphics();
 	g_clear_pointer(&video_stream->cursor.texture, gs_texture_destroy);
@@ -593,7 +461,7 @@ static const struct _obs_pipewire_stream_impl stream_impl = {
 	.set_cursor_visible = video_stream_set_cursor_visible,
 };
 
-obs_pipewire_stream *obs_pipewire_create_stream_video(obs_source_t *source)
+obs_pipewire_stream *obs_pipewire_create_stream_video_sync(obs_source_t *source)
 {
 	struct _obs_pipewire_stream_video *video_stream;
 
@@ -604,7 +472,7 @@ obs_pipewire_stream *obs_pipewire_create_stream_video(obs_source_t *source)
 					    PW_STREAM_FLAG_MAP_BUFFERS;
 
 	obs_pipewire_stream_init(&video_stream->obs_pw_stream, &stream_impl);
-	init_format_info(video_stream);
+	video_stream->format_info.da = create_format_info_sync();
 
 	obs_get_video_info(&video_stream->video_info);
 

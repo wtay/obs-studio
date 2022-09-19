@@ -1,4 +1,4 @@
-/* pipewire-stream.h
+/* pipewire-stream-video-async.h
  *
  * Copyright 2020 Georges Basile Stavracas Neto <georges.stavracas@gmail.com>
  * Copyright 2022 columbarius <co1umbarius@protonmail.com>
@@ -27,4 +27,4 @@
 #include <pipewire/pipewire.h>
 
 obs_pipewire_stream *
-obs_pipewire_create_stream_video(obs_source_t *source);
+obs_pipewire_create_stream_video_async(obs_source_t *source);

@@ -36,8 +36,10 @@ target_sources(
           pipewire.c
           pipewire.h
           pipewire-internal.h
-          pipewire-stream.c
-          pipewire-stream.h
+          pipewire-stream-video-async.c
+          pipewire-stream-video-async.h
+          pipewire-stream-video-sync.c
+          pipewire-stream-video-sync.h
           pipewire-utils.c
           pipewire-utils.h
           pipewire-utils-video.c

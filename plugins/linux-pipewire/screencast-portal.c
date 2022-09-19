@@ -19,7 +19,7 @@
  */
 
 #include "pipewire.h"
-#include "pipewire-stream.h"
+#include "pipewire-stream-video-sync.h"
 #include "portal.h"
 
 #include <gio/gunixfdlist.h>
@@ -194,7 +194,7 @@ static void on_pipewire_remote_opened_cb(GObject *source, GAsyncResult *res,
 		return;
 
 	capture->obs_pw_stream =
-		obs_pipewire_create_stream_video(capture->source);
+		obs_pipewire_create_stream_video_sync(capture->source);
 	obs_pipewire_connect_stream(
 		capture->obs_pw, capture->obs_pw_stream, capture->pipewire_node,
 		"OBS Studio",
