@@ -22,6 +22,7 @@
 #pragma once
 
 #include <obs-module.h>
+#include <media-io/video-io.h>
 #include <pipewire/pipewire.h>
 #include <spa/pod/builder.h>
 
@@ -51,6 +52,9 @@ struct _obs_pipewire_stream_impl {
 			     gs_effect_t *effect);
 	void (*set_cursor_visible)(struct _obs_pipewire_stream *obs_pw_stream,
 				   bool cursor_visible);
+	void (*export_frame)(struct _obs_pipewire_stream *obs_pw_stream,
+			     struct pw_buffer *b,
+			     struct video_data_frame *frame);
 };
 
 struct _obs_pipewire_stream {

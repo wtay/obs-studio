@@ -54,6 +54,7 @@ bool lookup_format_info_from_spa_format(uint32_t spa_format,
 
 struct darray create_format_info_async(void);
 struct darray create_format_info_sync(void);
+struct darray create_format_info_output(void);
 void clear_format_info(struct darray *f_info);
 void remove_modifier_from_format(struct darray *f_info,
 				 struct obs_pw_version *server_version,

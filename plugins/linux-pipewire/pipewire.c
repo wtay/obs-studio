@@ -124,8 +124,7 @@ static void renegotiate_format(void *data, uint64_t expirations)
 		SPA_POD_BUILDER_INIT(params_buffer, sizeof(params_buffer));
 	uint32_t n_params;
 	if (!obs_pw_stream->impl->build_format_params(
-		    obs_pw_stream, &pod_builder,
-		    &params, &n_params)) {
+		    obs_pw_stream, &pod_builder, &params, &n_params)) {
 		teardown_pipewire(obs_pw);
 		pw_thread_loop_unlock(obs_pw->thread_loop);
 		return;
@@ -362,8 +361,7 @@ bool obs_pipewire_connect_stream(obs_pipewire *obs_pw,
 		SPA_POD_BUILDER_INIT(params_buffer, sizeof(params_buffer));
 
 	if (!obs_pw_stream->impl->build_format_params(
-		    obs_pw_stream, &pod_builder,
-		    &params, &n_params)) {
+		    obs_pw_stream, &pod_builder, &params, &n_params)) {
 		pw_thread_loop_unlock(obs_pw->thread_loop);
 		bfree(obs_pw_stream);
 		return false;
@@ -443,6 +441,27 @@ void obs_pipewire_stream_set_cursor_visible(obs_pipewire_stream *obs_pw_stream,
 	if (obs_pw_stream->impl->set_cursor_visible)
 		obs_pw_stream->impl->set_cursor_visible(obs_pw_stream,
 							cursor_visible);
+}
+
+void obs_pipewire_stream_export_frame(obs_pipewire_stream *obs_pw_stream,
+				      struct video_data *frame)
+{
+	if (!obs_pw_stream->impl->export_frame)
+		return;
+
+	if (!obs_pw_stream->negotiated)
+		return;
+
+	struct pw_buffer *b;
+	b = pw_stream_dequeue_buffer(obs_pw_stream->stream);
+	if (!b) {
+		blog(LOG_DEBUG, "[pipewire] Out of buffers!");
+		return;
+	}
+
+	obs_pw_stream->impl->export_frame(obs_pw_stream, b, frame);
+
+	pw_stream_queue_buffer(obs_pw_stream->stream, b);
 }
 
 void obs_pipewire_stream_destroy(obs_pipewire_stream *obs_pw_stream)

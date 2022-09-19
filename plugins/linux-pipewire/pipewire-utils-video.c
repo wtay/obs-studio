@@ -110,6 +110,14 @@ static const uint32_t supported_formats_sync[] = {
 #define N_SUPPORTED_FORMATS_SYNC \
 	(sizeof(supported_formats_sync) / sizeof(supported_formats_sync[0]))
 
+static const uint32_t supported_formats_output[] = {
+	SPA_VIDEO_FORMAT_BGRA, SPA_VIDEO_FORMAT_RGBA, SPA_VIDEO_FORMAT_BGRx,
+	SPA_VIDEO_FORMAT_RGBx, SPA_VIDEO_FORMAT_YUY2,
+};
+
+#define N_SUPPORTED_FORMATS_OUTPUT \
+	(sizeof(supported_formats_output) / sizeof(supported_formats_output[0]))
+
 bool lookup_format_info_from_spa_format(uint32_t spa_format,
 					struct format_data *out_format_data)
 {
@@ -316,6 +324,26 @@ struct darray create_format_info_sync(void)
 
 	bfree(drm_formats);
 
+	return format_info.da;
+}
+
+struct darray create_format_info_output(void)
+{
+	DARRAY(struct format_info) format_info;
+	da_init(format_info);
+
+	for (size_t i = 0; i < N_SUPPORTED_FORMATS_OUTPUT; i++) {
+		struct format_info *info;
+		struct format_data tmp;
+		if (!lookup_format_info_from_spa_format(
+			    supported_formats_output[i], &tmp))
+			continue;
+
+		info = da_push_back_new(format_info);
+		da_init(info->modifiers);
+		info->spa_format = tmp.spa_format;
+		info->drm_format = tmp.drm_format;
+	}
 	return format_info.da;
 }
 

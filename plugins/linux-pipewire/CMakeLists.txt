@@ -40,6 +40,8 @@ target_sources(
           pipewire-stream-video-async.h
           pipewire-stream-video-sync.c
           pipewire-stream-video-sync.h
+          pipewire-stream-video-output.c
+          pipewire-stream-video-output.h
           pipewire-utils.c
           pipewire-utils.h
           pipewire-utils-video.c
