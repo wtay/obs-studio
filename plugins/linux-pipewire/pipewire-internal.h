@@ -22,6 +22,11 @@
 #pragma once
 
 #include <obs-module.h>
+#include <pipewire/pipewire.h>
+#include <spa/pod/builder.h>
+
+struct _obs_pipewire_stream;
+struct _obs_pipewire;
 
 struct obs_pw_version {
 	int major;
@@ -29,3 +34,41 @@ struct obs_pw_version {
 	int micro;
 };
 
+struct _obs_pipewire_stream_impl {
+	void (*process_buffer)(struct _obs_pipewire_stream *obs_pw_stream,
+			       struct pw_buffer *b);
+	void (*param_changed)(struct _obs_pipewire_stream *obs_pw_stream,
+			      uint32_t id, const struct spa_pod *param);
+	bool (*build_format_params)(struct _obs_pipewire_stream *obs_pw_stream,
+				    struct spa_pod_builder *b,
+				    const struct spa_pod ***params_list,
+				    uint32_t *n_params);
+	void (*destroy)(struct _obs_pipewire_stream *obs_pw_stream);
+	// Video functions
+	uint32_t (*get_width)(struct _obs_pipewire_stream *obs_pw_stream);
+	uint32_t (*get_height)(struct _obs_pipewire_stream *obs_pw_stream);
+	void (*render_video)(struct _obs_pipewire_stream *obs_pw_stream,
+			     gs_effect_t *effect);
+	void (*set_cursor_visible)(struct _obs_pipewire_stream *obs_pw_stream,
+				   bool cursor_visible);
+};
+
+struct _obs_pipewire_stream {
+	struct _obs_pipewire_stream_impl *impl;
+	struct _obs_pipewire *obs_pw;
+
+	struct pw_stream *stream;
+	struct spa_hook stream_listener;
+	struct spa_source *reneg;
+
+	enum pw_direction direction;
+	uint32_t flags;
+
+	bool negotiated;
+};
+
+void obs_pipewire_stream_init(struct _obs_pipewire_stream *obs_pipewire_stream,
+			      struct _obs_pipewire_stream_impl *impl);
+
+void obs_pipewire_stream_signal_reneg(struct _obs_pipewire_stream *obs_pipewire_stream);
+struct obs_pw_version *obs_pipewire_stream_get_serverversion(struct _obs_pipewire_stream *obs_pipewire_stream);

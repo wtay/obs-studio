@@ -36,6 +36,8 @@ target_sources(
           pipewire.c
           pipewire.h
           pipewire-internal.h
+          pipewire-stream.c
+          pipewire-stream.h
           pipewire-utils.c
           pipewire-utils.h
           pipewire-utils-video.c

@@ -19,6 +19,7 @@
  */
 
 #include "pipewire.h"
+#include "pipewire-stream.h"
 #include "portal.h"
 
 #include <gio/gunixfdlist.h>
@@ -192,8 +193,10 @@ static void on_pipewire_remote_opened_cb(GObject *source, GAsyncResult *res,
 	if (!capture->obs_pw)
 		return;
 
-	capture->obs_pw_stream = obs_pipewire_connect_stream(
-		capture->obs_pw, capture->source, capture->pipewire_node,
+	capture->obs_pw_stream =
+		obs_pipewire_create_stream_video(capture->source);
+	obs_pipewire_connect_stream(
+		capture->obs_pw, capture->obs_pw_stream, capture->pipewire_node,
 		"OBS Studio",
 		pw_properties_new(PW_KEY_MEDIA_TYPE, "Video",
 				  PW_KEY_MEDIA_CATEGORY, "Capture",

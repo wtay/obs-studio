@@ -35,10 +35,10 @@ struct pw_registry *obs_pipewire_get_registry(obs_pipewire *obs_pw);
 void obs_pipewire_roundtrip(obs_pipewire *obs_pw);
 void obs_pipewire_destroy(obs_pipewire *obs_pw);
 
-obs_pipewire_stream *
-obs_pipewire_connect_stream(obs_pipewire *obs_pw, obs_source_t *source,
-			    int pipewire_node, const char *stream_name,
-			    struct pw_properties *stream_properties);
+bool obs_pipewire_connect_stream(obs_pipewire *obs_pw,
+				 obs_pipewire_stream *obs_pw_stream,
+				 int pipewire_node, const char *stream_name,
+				 struct pw_properties *stream_properties);
 
 void obs_pipewire_stream_show(obs_pipewire_stream *obs_pw);
 void obs_pipewire_stream_hide(obs_pipewire_stream *obs_pw);
@@ -49,4 +49,4 @@ void obs_pipewire_stream_video_render(obs_pipewire_stream *obs_pw,
 
 void obs_pipewire_stream_set_cursor_visible(obs_pipewire_stream *obs_pw,
 					    bool cursor_visible);
-void obs_pipewire_stream_destroy(obs_pipewire_stream *obs_pw_stream);
+void obs_pipewire_stream_destroy(obs_pipewire_stream *obs_pw);
