@@ -172,7 +172,7 @@ static void video_stream_param_changed(obs_pipewire_stream *obs_pw_stream,
 
 	stride = SPA_ROUND_UP_N(
 		format_data.bpp * video_stream->format.info.raw.size.width, 4);
-	size = SPA_ROUND_UP_N(stride * video_stream->format.info.raw.size.width,
+	size = SPA_ROUND_UP_N(stride * video_stream->format.info.raw.size.height,
 			      4);
 
 	blog(LOG_INFO, "[pipewire] Negotiated format:");
@@ -308,7 +308,8 @@ static void video_stream_export_frame(obs_pipewire_stream *obs_pw_stream,
 			video_stream->format.info.raw.size.height * stride;
 	}
 	video_frame_copy(&frame_out, (struct video_frame *)frame,
-			 format_data.video_format, 1);
+			 format_data.video_format,
+			 video_stream->format.info.raw.size.height);
 
 	struct spa_meta_header *h;
 	if ((h = spa_buffer_find_meta_data(spa_buf, SPA_META_Header,
