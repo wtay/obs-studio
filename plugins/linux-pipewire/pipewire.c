@@ -452,6 +452,10 @@ void obs_pipewire_stream_export_frame(obs_pipewire_stream *obs_pw_stream,
 	if (!obs_pw_stream->negotiated)
 		return;
 
+	if (pw_stream_get_state(obs_pw_stream->stream, NULL) !=
+	    PW_STREAM_STATE_STREAMING)
+		return;
+
 	struct pw_buffer *b;
 	b = pw_stream_dequeue_buffer(obs_pw_stream->stream);
 	if (!b) {
