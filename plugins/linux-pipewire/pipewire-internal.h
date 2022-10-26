@@ -54,7 +54,7 @@ struct _obs_pipewire_stream_impl {
 				   bool cursor_visible);
 	void (*export_frame)(struct _obs_pipewire_stream *obs_pw_stream,
 			     struct pw_buffer *b,
-			     struct video_data_frame *frame);
+			     struct video_data *frame);
 };
 
 struct _obs_pipewire_stream {
