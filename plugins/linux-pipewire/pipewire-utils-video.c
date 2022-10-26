@@ -87,6 +87,15 @@ static const struct format_data supported_formats[] = {
 		2,
 		"YUYV422",
 	},
+	{
+		SPA_VIDEO_FORMAT_NV12,
+		DRM_FORMAT_NV12,
+		GS_UNKNOWN,
+		VIDEO_FORMAT_NV12,
+		false,
+		2,
+		"NV12",
+	},
 };
 
 #define N_SUPPORTED_FORMATS \
