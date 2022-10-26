@@ -382,7 +382,7 @@ bool obs_pipewire_connect_stream(obs_pipewire *obs_pw,
 }
 
 void obs_pipewire_stream_init(struct _obs_pipewire_stream *obs_pw_stream,
-			      struct _obs_pipewire_stream_impl *impl)
+			      const struct _obs_pipewire_stream_impl *impl)
 {
 	obs_pw_stream->impl = impl;
 }

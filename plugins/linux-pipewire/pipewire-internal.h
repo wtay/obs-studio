@@ -58,7 +58,7 @@ struct _obs_pipewire_stream_impl {
 };
 
 struct _obs_pipewire_stream {
-	struct _obs_pipewire_stream_impl *impl;
+	const struct _obs_pipewire_stream_impl *impl;
 	struct _obs_pipewire *obs_pw;
 
 	struct pw_stream *stream;
@@ -72,7 +72,7 @@ struct _obs_pipewire_stream {
 };
 
 void obs_pipewire_stream_init(struct _obs_pipewire_stream *obs_pipewire_stream,
-			      struct _obs_pipewire_stream_impl *impl);
+			      const struct _obs_pipewire_stream_impl *impl);
 
 void obs_pipewire_stream_signal_reneg(struct _obs_pipewire_stream *obs_pipewire_stream);
 struct obs_pw_version *obs_pipewire_stream_get_serverversion(struct _obs_pipewire_stream *obs_pipewire_stream);
