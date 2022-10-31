@@ -30,7 +30,6 @@
 #include <unistd.h>
 #include <gio/gio.h>
 #include <gio/gunixfdlist.h>
-#include <spa/debug/dict.h>
 #include <spa/node/keys.h>
 #include <spa/pod/iter.h>
 #include <spa/param/props.h>
@@ -318,17 +317,69 @@ static void camera_format_list(struct camera_device *dev, obs_property_t *prop)
 	}
 }
 
+static bool control_changed(void *data, obs_properties_t *props,
+				obs_property_t *prop, obs_data_t *settings)
+{
+	struct camera_device *dev;
+	const char *device_id;
+	uint32_t id;
+	char buf[1024];
+	struct spa_pod_builder b = SPA_POD_BUILDER_INIT(buf, sizeof(buf));
+	struct spa_pod_frame f[1];
+	struct spa_pod *param;
+
+	device_id = obs_data_get_string(settings, "device_id");
+
+	dev = g_hash_table_lookup(connection->devices, device_id);
+	if (dev == NULL) {
+		blog(LOG_ERROR, "unknown device %s", device_id);
+		return false;
+	}
+
+	id = SPA_PTR_TO_UINT32(data);
+
+	spa_pod_builder_push_object(&b, &f[0],
+			SPA_TYPE_OBJECT_Props,  SPA_PARAM_Props);
+
+	switch (obs_property_get_type(prop)) {
+	case OBS_PROPERTY_BOOL:
+	{
+		bool val = obs_data_get_bool(settings, obs_property_name(prop));
+                spa_pod_builder_add(&b, id, SPA_POD_Bool(val), 0);
+		break;
+	}
+	case OBS_PROPERTY_INT:
+	case OBS_PROPERTY_LIST:
+	{
+		int val = obs_data_get_int(settings, obs_property_name(prop));
+                spa_pod_builder_add(&b, id, SPA_POD_Int(val), 0);
+		break;
+	}
+	default:
+		blog(LOG_ERROR, "unknown property type for %s",
+				obs_property_name(prop));
+		return false;
+	}
+	param = spa_pod_builder_pop(&b, &f[0]);
+
+	pw_node_set_param((struct pw_node*)dev->proxy,
+			SPA_PARAM_Props, 0, param);
+
+	return false;
+}
+
 static inline void add_control_property(obs_properties_t *props,
 					obs_data_t *settings, struct camera_device *dev,
 					struct param *p)
 {
-        obs_property_t *prop = NULL;
+	obs_property_t *prop = NULL;
 	const char *name;
 	const struct spa_pod *type, *pod, *labels = NULL;
-	uint32_t n_vals, choice, container = SPA_ID_INVALID;
+	uint32_t id, n_vals, choice, container = SPA_ID_INVALID;
 
 	if (spa_pod_parse_object(p->param,
 				SPA_TYPE_OBJECT_PropInfo, NULL,
+				SPA_PROP_INFO_id, SPA_POD_Id(&id),
 				SPA_PROP_INFO_description, SPA_POD_OPT_String(&name),
 				SPA_PROP_INFO_type, SPA_POD_PodChoice(&type),
 				SPA_PROP_INFO_container, SPA_POD_OPT_Id(&container),
@@ -375,7 +426,9 @@ static inline void add_control_property(obs_properties_t *props,
 	                        n_vals > 2 ? vals[2] : vals[0],
 				n_vals > 3 ? vals[3] : 1);
 		}
-               	obs_data_set_default_int(settings, (char *)name, vals[0]);
+		obs_data_set_default_int(settings, (char *)name, vals[0]);
+		obs_property_set_modified_callback2(prop, control_changed,
+					SPA_UINT32_TO_PTR(id));
 		break;
 	}
 	case SPA_TYPE_Bool:
@@ -383,9 +436,10 @@ static inline void add_control_property(obs_properties_t *props,
 		int32_t *vals = SPA_POD_BODY(pod);
 		if (n_vals < 1)
 			return;
-		prop = obs_properties_add_bool(
-                        props, (char *)name, (char *)name);
-                obs_data_set_default_bool(settings, (char *)name, vals[0]);
+		prop = obs_properties_add_bool(props, (char *)name, (char *)name);
+		obs_data_set_default_bool(settings, (char *)name, vals[0]);
+		obs_property_set_modified_callback2(prop, control_changed,
+					SPA_UINT32_TO_PTR(id));
 		break;
 	}
 	default:
@@ -866,12 +920,12 @@ static obs_properties_t *pipewire_camera_get_properties(void *data)
 	populate_cameras_list(camera_source, device_list);
 
 	obs_property_set_modified_callback2(device_list, device_selected,
-					    camera_source);
+					camera_source);
 	obs_property_set_modified_callback2(format_list, format_selected,
-					    camera_source);
-        obs_property_set_modified_callback2(resolution_list,
-					    resolution_selected,
-					    camera_source);
+					camera_source);
+	obs_property_set_modified_callback2(resolution_list,
+					resolution_selected,
+					camera_source);
 
 	return props;
 }
@@ -882,7 +936,6 @@ static void pipewire_camera_update(void *data, obs_data_t *settings)
 	const char *device_id;
 
 	device_id = obs_data_get_string(settings, "device_id");
-	blog(LOG_INFO, "[pipewire-camera] update device %s", device_id);
 
 	if (update_device_id(camera_source, device_id))
 		stream_camera(camera_source);
