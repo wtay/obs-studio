@@ -492,6 +492,14 @@ static bool device_selected(void *data, obs_properties_t *props,
 	return true;
 }
 
+static void resolution_list(struct camera_device *dev, uint32_t pixelformat,
+		obs_property_t *prop)
+{
+	obs_property_list_clear(prop);
+
+	obs_property_list_add_int(prop, obs_module_text("LeaveUnchanged"), -1);
+}
+
 /*
  * Format selected callback
  */
@@ -499,11 +507,29 @@ static bool format_selected(void *data, obs_properties_t *props,
 			    obs_property_t *p, obs_data_t *settings)
 {
 	struct camera_portal_source *camera_source = data;
+	struct camera_device *device;
+
 	blog(LOG_INFO, "[camera-portal] selected format for '%s'",
 	     camera_source->device_id);
+
+	device = g_hash_table_lookup(connection->devices, camera_source->device_id);
+	if (device == NULL)
+		return true;
+
+	obs_property_t *resolution = obs_properties_get(props, "resolution");
+	resolution_list(device, obs_data_get_int(settings, "pixelformat"),
+				resolution);
+
 	return false;
 }
 
+static void framerate_list(struct camera_device *dev, uint32_t pixelformat,
+			uint32_t widthheight, obs_property_t *prop)
+{
+	obs_property_list_clear(prop);
+
+	obs_property_list_add_int(prop, obs_module_text("LeaveUnchanged"), -1);
+}
 /*
  * Resolution selected callback
  */
@@ -511,8 +537,21 @@ static bool resolution_selected(void *data, obs_properties_t *props,
 				obs_property_t *p, obs_data_t *settings)
 {
 	struct camera_portal_source *camera_source = data;
+	struct camera_device *device;
+	int widthheight;
+
 	blog(LOG_INFO, "[camera-portal] selected resolution for '%s'",
 	     camera_source->device_id);
+
+	device = g_hash_table_lookup(connection->devices, camera_source->device_id);
+	if (device == NULL)
+		return true;
+
+	obs_property_t *prop = obs_properties_get(props, "framerate");
+	widthheight = obs_data_get_int(settings, "resolution");
+	framerate_list(device, obs_data_get_int(settings, "pixelformat"),
+				widthheight, prop);
+
 	return false;
 }
 
