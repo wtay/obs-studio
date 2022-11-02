@@ -345,14 +345,20 @@ static bool control_changed(void *data, obs_properties_t *props,
 	case OBS_PROPERTY_BOOL:
 	{
 		bool val = obs_data_get_bool(settings, obs_property_name(prop));
-                spa_pod_builder_add(&b, id, SPA_POD_Bool(val), 0);
+		spa_pod_builder_add(&b, id, SPA_POD_Bool(val), 0);
+		break;
+	}
+	case OBS_PROPERTY_FLOAT:
+	{
+		float val = obs_data_get_double(settings, obs_property_name(prop));
+		spa_pod_builder_add(&b, id, SPA_POD_Float(val), 0);
 		break;
 	}
 	case OBS_PROPERTY_INT:
 	case OBS_PROPERTY_LIST:
 	{
 		int val = obs_data_get_int(settings, obs_property_name(prop));
-                spa_pod_builder_add(&b, id, SPA_POD_Int(val), 0);
+		spa_pod_builder_add(&b, id, SPA_POD_Int(val), 0);
 		break;
 	}
 	default:
@@ -394,8 +400,10 @@ static inline void add_control_property(obs_properties_t *props,
 	case SPA_TYPE_Int:
 	{
 		int32_t *vals = SPA_POD_BODY(pod);
+		int32_t min, max, def, step;
 		if (n_vals < 1)
 			return;
+		def = vals[0];
 		if (choice == SPA_CHOICE_Enum) {
 			struct spa_pod_parser prs;
 			struct spa_pod_frame f;
@@ -420,13 +428,14 @@ static inline void add_control_property(obs_properties_t *props,
 				obs_property_list_add_int(prop, (char*)desc, id);
 			}
 		} else {
+			min = n_vals > 1 ? vals[1] : def;
+			max = n_vals > 2 ? vals[2] : def;
+			step = n_vals > 3 ? vals[3] : (max - min) / 256.0f;
 			prop = obs_properties_add_int_slider(
 	                        props, (char *)name, (char *)name,
-	                        n_vals > 1 ? vals[1] : vals[0],
-	                        n_vals > 2 ? vals[2] : vals[0],
-				n_vals > 3 ? vals[3] : 1);
+				min, max, step);
 		}
-		obs_data_set_default_int(settings, (char *)name, vals[0]);
+		obs_data_set_default_int(settings, (char *)name, def);
 		obs_property_set_modified_callback2(prop, control_changed,
 					SPA_UINT32_TO_PTR(id));
 		break;
@@ -438,6 +447,24 @@ static inline void add_control_property(obs_properties_t *props,
 			return;
 		prop = obs_properties_add_bool(props, (char *)name, (char *)name);
 		obs_data_set_default_bool(settings, (char *)name, vals[0]);
+		obs_property_set_modified_callback2(prop, control_changed,
+					SPA_UINT32_TO_PTR(id));
+		break;
+	}
+	case SPA_TYPE_Float:
+	{
+		float *vals = SPA_POD_BODY(pod);
+		float min, max, def, step;
+		if (n_vals < 1)
+			return;
+		def = vals[0];
+		min = n_vals > 1 ? vals[1] : def;
+		max = n_vals > 2 ? vals[2] : def;
+		step = n_vals > 3 ? vals[3] : (max - min) / 256.0f;
+		prop = obs_properties_add_float_slider(
+	                        props, (char *)name, (char *)name,
+				min, max, step);
+		obs_data_set_default_double(settings, (char *)name, def);
 		obs_property_set_modified_callback2(prop, control_changed,
 					SPA_UINT32_TO_PTR(id));
 		break;
@@ -470,7 +497,7 @@ static bool device_selected(void *data, obs_properties_t *props,
 
 	device = g_hash_table_lookup(connection->devices, device_id);
 	if (device == NULL)
-		return true;
+		return false;
 
 	if (update_device_id(camera_source, device_id))
 		stream_camera(camera_source);
@@ -514,7 +541,7 @@ static bool format_selected(void *data, obs_properties_t *props,
 
 	device = g_hash_table_lookup(connection->devices, camera_source->device_id);
 	if (device == NULL)
-		return true;
+		return false;
 
 	obs_property_t *resolution = obs_properties_get(props, "resolution");
 	resolution_list(device, obs_data_get_int(settings, "pixelformat"),
@@ -545,7 +572,7 @@ static bool resolution_selected(void *data, obs_properties_t *props,
 
 	device = g_hash_table_lookup(connection->devices, camera_source->device_id);
 	if (device == NULL)
-		return true;
+		return false;
 
 	obs_property_t *prop = obs_properties_get(props, "framerate");
 	widthheight = obs_data_get_int(settings, "resolution");
