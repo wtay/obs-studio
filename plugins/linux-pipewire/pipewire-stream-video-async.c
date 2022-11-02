@@ -20,6 +20,7 @@
  */
 
 #include "pipewire.h"
+#include "pipewire-decoder.h"
 #include "pipewire-internal.h"
 #include "pipewire-utils.h"
 #include "pipewire-utils-video.h"
@@ -46,6 +47,7 @@ struct _obs_pipewire_stream_video {
 	obs_source_t *source;
 
 	struct spa_video_info format;
+	struct pipewire_decoder decoder;
 
 	struct obs_video_info video_info;
 
@@ -82,28 +84,56 @@ video_color_range_from_spa_color_range(enum spa_video_color_range colorrange)
 	}
 }
 
-static bool prepare_obs_frame(struct spa_video_info *format,
+static bool prepare_obs_frame(struct _obs_pipewire_stream_video *stream, struct spa_buffer *buffer,
 			      struct obs_source_frame *frame)
 {
 	struct format_data format_data;
 
-	frame->width = format->info.raw.size.width;
-	frame->height = format->info.raw.size.height;
+	switch (stream->format.media_subtype) {
+	case SPA_MEDIA_SUBTYPE_raw:
 
-	video_format_get_parameters(video_colorspace_from_spa_color_matrix(
-					    format->info.raw.color_matrix),
-				    video_color_range_from_spa_color_range(
-					    format->info.raw.color_range),
-				    frame->color_matrix, frame->color_range_min,
-				    frame->color_range_max);
+		frame->width = stream->format.info.raw.size.width;
+		frame->height = stream->format.info.raw.size.height;
 
-	if (!lookup_format_info_from_spa_format(format->info.raw.format,
-						&format_data) ||
-	    format_data.video_format == VIDEO_FORMAT_NONE)
-		return false;
+		video_format_get_parameters(video_colorspace_from_spa_color_matrix(
+					    stream->format.info.raw.color_matrix),
+					    video_color_range_from_spa_color_range(
+						    stream->format.info.raw.color_range),
+					    frame->color_matrix, frame->color_range_min,
+					    frame->color_range_max);
 
-	frame->format = format_data.video_format;
-	frame->linesize[0] = SPA_ROUND_UP_N(frame->width * format_data.bpp, 4);
+		if (!lookup_format_info_from_spa_format(stream->format.info.raw.format,
+							&format_data) ||
+		    format_data.video_format == VIDEO_FORMAT_NONE)
+			return false;
+
+		frame->format = format_data.video_format;
+		frame->linesize[0] = SPA_ROUND_UP_N(frame->width * format_data.bpp, 4);
+
+		for (uint32_t i = 0; i < buffer->n_datas && i < MAX_AV_PLANES; i++) {
+			frame->data[i] = buffer->datas[i].data;
+			if (frame->data[i] == NULL) {
+				blog(LOG_ERROR, "[pipewire] Failed to access data");
+				return false;
+			}
+		}
+		break;
+	default:
+		if (pipewire_decode_frame(frame, buffer->datas[0].data,
+						buffer->datas[0].chunk->size,
+						&stream->decoder) < 0) {
+			blog(LOG_ERROR, "failed to unpack jpeg or h264");
+			break;
+		}
+		break;
+	}
+
+	blog(LOG_DEBUG, "[pipewire] Camera frame info: Format: %s, Planes: %u",
+		get_video_format_name(frame->format), buffer->n_datas);
+	for (uint32_t i = 0; i < buffer->n_datas && i < MAX_AV_PLANES; i++) {
+		blog(LOG_DEBUG, "[pipewire] Plane %u: Dataptr:%p, Linesize:%d",
+			i, frame->data[i], frame->linesize[i]);
+	}
 	return true;
 }
 
@@ -141,24 +171,10 @@ static void video_stream_process_buffer(obs_pipewire_stream *obs_pw_stream,
 	blog(LOG_DEBUG, "[pipewire] Buffer has memory texture");
 
 	struct obs_source_frame out = {0};
-	if (!prepare_obs_frame(&video_stream->format, &out)) {
+
+	if (!prepare_obs_frame(video_stream, buffer, &out)) {
 		blog(LOG_ERROR, "[pipewire] Couldn't prepare frame");
 		return;
-	}
-
-	for (uint32_t i = 0; i < buffer->n_datas && i < MAX_AV_PLANES; i++) {
-		out.data[i] = buffer->datas[i].data;
-		if (out.data[i] == NULL) {
-			blog(LOG_ERROR, "[pipewire] Failed to access data");
-			return;
-		}
-	}
-
-	blog(LOG_DEBUG, "[pipewire] Camera frame info: Format: %s, Planes: %u",
-	     get_video_format_name(out.format), buffer->n_datas);
-	for (uint32_t i = 0; i < buffer->n_datas && i < MAX_AV_PLANES; i++) {
-		blog(LOG_DEBUG, "[pipewire] Plane %u: Dataptr:%p, Linesize:%d",
-		     i, out.data[i], out.linesize[i]);
 	}
 
 	obs_source_output_video(video_stream->source, &out);
@@ -174,37 +190,77 @@ static void video_stream_param_changed(obs_pipewire_stream *obs_pw_stream,
 	uint32_t buffer_types;
 	uint8_t params_buffer[1024];
 	int result;
+	struct spa_rectangle size;
+	struct spa_fraction rate;
 
 	if (!param || id != SPA_PARAM_Format)
 		return;
 
+	spa_zero(video_stream->format);
 	result = spa_format_parse(param, &video_stream->format.media_type,
 				  &video_stream->format.media_subtype);
 	if (result < 0)
 		return;
 
-	if (video_stream->format.media_type != SPA_MEDIA_TYPE_video ||
-	    video_stream->format.media_subtype != SPA_MEDIA_SUBTYPE_raw)
+	if (video_stream->format.media_type != SPA_MEDIA_TYPE_video)
 		return;
 
-	spa_format_video_raw_parse(param, &video_stream->format.info.raw);
+	switch (video_stream->format.media_subtype) {
+	case SPA_MEDIA_SUBTYPE_raw:
+		if (spa_format_video_raw_parse(param, &video_stream->format.info.raw) < 0)
+			return;
 
-	buffer_types = 1 << SPA_DATA_MemPtr;
+		buffer_types = 1 << SPA_DATA_MemPtr;
 
-	blog(LOG_INFO, "[pipewire] Negotiated format:");
+		blog(LOG_INFO, "[pipewire] Negotiated format:");
+		blog(LOG_INFO, "[pipewire]     Format: %d (%s)",
+		     video_stream->format.info.raw.format,
+		     spa_debug_type_find_name(spa_type_video_format,
+					      video_stream->format.info.raw.format));
+		blog(LOG_INFO, "[pipewire]     Size: %dx%d",
+		     video_stream->format.info.raw.size.width,
+		     video_stream->format.info.raw.size.height);
+		blog(LOG_INFO, "[pipewire]     Framerate: %d/%d",
+		     video_stream->format.info.raw.framerate.num,
+		     video_stream->format.info.raw.framerate.denom);
+		break;
+	case SPA_MEDIA_SUBTYPE_mjpg:
+		if (spa_format_video_mjpg_parse(param, &video_stream->format.info.mjpg) < 0)
+			return;
 
-	blog(LOG_INFO, "[pipewire]     Format: %d (%s)",
-	     video_stream->format.info.raw.format,
-	     spa_debug_type_find_name(spa_type_video_format,
-				      video_stream->format.info.raw.format));
+		blog(LOG_INFO, "[pipewire] Negotiated format:");
+		blog(LOG_INFO, "[pipewire]     Format: (MJPG)");
+		blog(LOG_INFO, "[pipewire]     Size: %dx%d",
+		     video_stream->format.info.mjpg.size.width,
+		     video_stream->format.info.mjpg.size.height);
+		blog(LOG_INFO, "[pipewire]     Framerate: %d/%d",
+		     video_stream->format.info.mjpg.framerate.num,
+		     video_stream->format.info.mjpg.framerate.denom);
 
-	blog(LOG_INFO, "[pipewire]     Size: %dx%d",
-	     video_stream->format.info.raw.size.width,
-	     video_stream->format.info.raw.size.height);
+		break;
+	case SPA_MEDIA_SUBTYPE_h264:
+		if (spa_format_video_h264_parse(param, &video_stream->format.info.h264) < 0)
+			return;
 
-	blog(LOG_INFO, "[pipewire]     Framerate: %d/%d",
-	     video_stream->format.info.raw.framerate.num,
-	     video_stream->format.info.raw.framerate.denom);
+		blog(LOG_INFO, "[pipewire] Negotiated format:");
+		blog(LOG_INFO, "[pipewire]     Format: (H264)");
+		blog(LOG_INFO, "[pipewire]     Size: %dx%d",
+		     video_stream->format.info.h264.size.width,
+		     video_stream->format.info.h264.size.height);
+		blog(LOG_INFO, "[pipewire]     Framerate: %d/%d",
+		     video_stream->format.info.h264.framerate.num,
+		     video_stream->format.info.h264.framerate.denom);
+
+		break;
+	default:
+		return;
+	}
+	if (video_stream->format.media_subtype != SPA_MEDIA_SUBTYPE_raw) {
+		if (pipewire_init_decoder(&video_stream->decoder, video_stream->format.media_subtype) < 0) {
+			blog(LOG_ERROR, "Failed to initialize decoder");
+			return;
+		}
+	}
 
 	/* Video crop */
 	pod_builder =
@@ -246,7 +302,17 @@ static uint32_t video_stream_get_width(obs_pipewire_stream *obs_pw_stream)
 
 	struct _obs_pipewire_stream_video *video_stream =
 		video_stream_get_stream(obs_pw_stream);
-	return video_stream->format.info.raw.size.width;
+
+	switch (video_stream->format.media_subtype) {
+	case SPA_MEDIA_SUBTYPE_raw:
+		return video_stream->format.info.raw.size.width;
+	case SPA_MEDIA_SUBTYPE_mjpg:
+		return video_stream->format.info.mjpg.size.width;
+	case SPA_MEDIA_SUBTYPE_h264:
+		return video_stream->format.info.h264.size.width;
+	default:
+		return 0;
+	}
 }
 
 static uint32_t video_stream_get_height(obs_pipewire_stream *obs_pw_stream)
@@ -256,7 +322,16 @@ static uint32_t video_stream_get_height(obs_pipewire_stream *obs_pw_stream)
 
 	struct _obs_pipewire_stream_video *video_stream =
 		video_stream_get_stream(obs_pw_stream);
-	return video_stream->format.info.raw.size.height;
+	switch (video_stream->format.media_subtype) {
+	case SPA_MEDIA_SUBTYPE_raw:
+		return video_stream->format.info.raw.size.height;
+	case SPA_MEDIA_SUBTYPE_mjpg:
+		return video_stream->format.info.mjpg.size.height;
+	case SPA_MEDIA_SUBTYPE_h264:
+		return video_stream->format.info.h264.size.height;
+	default:
+		return 0;
+	}
 }
 
 static void video_stream_destroy(obs_pipewire_stream *obs_pw_stream)
@@ -267,6 +342,10 @@ static void video_stream_destroy(obs_pipewire_stream *obs_pw_stream)
 	struct _obs_pipewire_stream_video *video_stream =
 		video_stream_get_stream(obs_pw_stream);
 	obs_source_output_video(video_stream->source, NULL);
+
+	if (video_stream->format.media_subtype != SPA_MEDIA_SUBTYPE_raw) {
+                pipewire_destroy_decoder(&video_stream->decoder);
+        }
 
 	clear_format_info(&video_stream->format_info.da);
 	bfree(video_stream);

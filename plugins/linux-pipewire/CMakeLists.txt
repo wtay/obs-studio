@@ -7,6 +7,7 @@ if(NOT ENABLE_PIPEWIRE)
 endif()
 
 find_package(PipeWire 0.3.33 REQUIRED)
+find_package(FFmpeg REQUIRED COMPONENTS avcodec avutil avformat)
 find_package(Gio QUIET)
 find_package(Libdrm QUIET) # we require libdrm/drm_fourcc.h to build
 
@@ -36,6 +37,8 @@ target_sources(
           pipewire.c
           pipewire.h
           pipewire-internal.h
+          pipewire-decoder.c
+          pipewire-decoder.h
           pipewire-stream-video-async.c
           pipewire-stream-video-async.h
           pipewire-stream-video-sync.c
@@ -57,7 +60,7 @@ target_sources(
 
 target_link_libraries(
   linux-pipewire PRIVATE OBS::libobs OBS::obsglad PipeWire::PipeWire GIO::GIO
-                         Libdrm::Libdrm)
+                         Libdrm::Libdrm FFmpeg::avcodec FFmpeg::avformat FFmpeg::avutil)
 
 set_target_properties(linux-pipewire PROPERTIES FOLDER "plugins")
 
