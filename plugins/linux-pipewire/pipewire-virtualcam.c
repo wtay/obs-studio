@@ -99,8 +99,6 @@ static bool virtualcam_start(void *data)
 		blog(LOG_WARNING, "Failed to start virtual camera");
 		return false;
 	}
-
-	obs_output_begin_data_capture(obs_pwvc->output, OBS_OUTPUT_VIDEO);
 	return true;
 }
 

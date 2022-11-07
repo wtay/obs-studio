@@ -213,6 +213,8 @@ static void video_stream_param_changed(obs_pipewire_stream *obs_pw_stream,
 	pw_stream_update_params(obs_pw_stream->stream, params, 2);
 
 	obs_pw_stream->negotiated = true;
+
+	obs_output_begin_data_capture(video_stream->output, OBS_OUTPUT_VIDEO);
 }
 
 static bool video_stream_build_format_params(obs_pipewire_stream *obs_pw_stream,
