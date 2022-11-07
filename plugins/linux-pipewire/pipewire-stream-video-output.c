@@ -299,11 +299,6 @@ static void video_stream_export_frame(obs_pipewire_stream *obs_pw_stream,
 				format_data.bpp,
 			4);
 		frame_out.data[i] = d[i].data;
-		d[i].mapoffset = 0;
-		d[i].maxsize =
-			video_stream->format.info.raw.size.height * stride;
-		d[i].flags = SPA_DATA_FLAG_READABLE;
-		d[i].type = SPA_DATA_MemPtr;
 		d[i].chunk->offset = 0;
 		d[i].chunk->stride = stride;
 		d[i].chunk->size =
