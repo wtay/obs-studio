@@ -134,7 +134,6 @@ static void video_stream_param_changed(obs_pipewire_stream *obs_pw_stream,
 		video_stream_get_stream(obs_pw_stream);
 	struct spa_pod_builder pod_builder;
 	const struct spa_pod *params[2];
-	uint32_t buffer_types;
 	uint32_t size;
 	uint32_t stride;
 	uint8_t params_buffer[1024];
@@ -153,8 +152,6 @@ static void video_stream_param_changed(obs_pipewire_stream *obs_pw_stream,
 		return;
 
 	spa_format_video_raw_parse(param, &video_stream->format.info.raw);
-
-	buffer_types = 1 << SPA_DATA_MemPtr;
 
 	struct format_data format_data;
 	if (!lookup_format_info_from_spa_format(
@@ -206,9 +203,7 @@ static void video_stream_param_changed(obs_pipewire_stream *obs_pw_stream,
 		SPA_PARAM_BUFFERS_buffers, SPA_POD_CHOICE_RANGE_Int(4, 1, 32),
 		SPA_PARAM_BUFFERS_blocks, SPA_POD_Int(1),
 		SPA_PARAM_BUFFERS_size, SPA_POD_Int(size),
-		SPA_PARAM_BUFFERS_stride, SPA_POD_Int(stride),
-		SPA_PARAM_BUFFERS_align, SPA_POD_Int(16),
-		SPA_PARAM_BUFFERS_dataType, SPA_POD_Int(1 << SPA_DATA_MemPtr));
+		SPA_PARAM_BUFFERS_stride, SPA_POD_Int(stride));
 
 	pw_stream_update_params(obs_pw_stream->stream, params, 2);
 
