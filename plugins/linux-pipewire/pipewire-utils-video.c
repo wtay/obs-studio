@@ -191,7 +191,7 @@ static struct spa_pod *build_format(struct spa_pod_builder *b,
 	/* add size and framerate ranges */
 	spa_pod_builder_add(b, SPA_FORMAT_VIDEO_size,
 			    SPA_POD_CHOICE_RANGE_Rectangle(
-				    &SPA_RECTANGLE(320, 240), // Arbitrary
+				    &SPA_RECTANGLE(ovi->output_width, ovi->output_height),
 				    &SPA_RECTANGLE(1, 1),
 				    &SPA_RECTANGLE(8192, 4320)),
 			    SPA_FORMAT_VIDEO_framerate,
