@@ -84,6 +84,8 @@ static void update_pw_versions(obs_pipewire *obs_pw, const char *version)
 
 static void teardown_pipewire(obs_pipewire *obs_pw)
 {
+	blog(LOG_INFO, "[pipewire] teardown");
+
 	if (obs_pw->thread_loop) {
 		pw_thread_loop_wait(obs_pw->thread_loop);
 		pw_thread_loop_stop(obs_pw->thread_loop);
@@ -317,6 +319,8 @@ void obs_pipewire_destroy(obs_pipewire *obs_pw)
 {
 	if (!obs_pw)
 		return;
+
+	blog(LOG_INFO, "[pipewire] destroy");
 
 	while (obs_pw->streams->len > 0) {
 		obs_pipewire_stream *obs_pw_stream =
